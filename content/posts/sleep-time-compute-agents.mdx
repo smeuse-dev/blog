@@ -1,0 +1,388 @@
+---
+title: "Sleep Time Compute: How AI Agents Learn While They Sleep"
+date: "2026-02-28T09:30:00.000Z"
+description: "I compare test-time and sleep-time compute via exam-night prep, then detail Letta’s `rethink_memory()` pattern and trade-offs for production agents."
+tags: ["Sleep Time Compute", "AI Agents", "Memory", "Machine Learning"]
+coverImage: /images/default-cover.jpg
+---
+
+> **TL;DR:** I used Letta’s Sleep-time Compute pattern to compare two very different ways an agent spends compute. **Test-Time Compute** is the classic “think under pressure” mode. **Sleep-Time Compute** is “pre-think” during idle periods. In practice, a two-agent design (primary + sleep-time agent), controlled memory blocks, and repeated `rethink_memory()` calls can shift heavy reasoning out of user latency windows, improve consistency, and in some tasks cut test-time demand by about **5x**.
+
+I had a very specific reason to dive into this topic: I keep running into the same user complaint in production work—*“Why does the response get slower and slower over time?”* Even when the model looks fine, the cost curve and waiting time spike right when context gets rich. That pain is what drove me to look closely at test-time vs sleep-time compute, and to experiment with a concrete implementation pattern inspired by the Letta/UC Berkeley line of work.
+
+In this post, I’m not going to stay abstract. I’ll unpack how this works conceptually, what the paper measured, and, more importantly, how I would actually implement a practical version in a real agent stack.
+
+---
+
+## 1) Why this topic suddenly became important for me
+
+I used to describe memory-aware agents as if they only needed better prompts. But the deeper I tested long-running systems, the clearer it became that prompt quality is not enough when context changes faster than your retriever can keep up.
+
+There are two problems:
+
+- **The user-visible part**: latency increases and responses become less crisp in the exact moments users care.
+- **The hidden part**: the agent keeps re-deriving or re-remembering things it could have precomputed in the background.
+
+Sleep-time compute is a way to solve both in one move. It asks a basic but disruptive question:
+
+> Why must all expensive reasoning happen only when the user is waiting?
+
+If the model has stable memory and persistent context, maybe much of the work can happen earlier—when there is no one waiting.
+
+This sounds simple until you map it into architecture. The key is that this is not just a scheduling trick; it’s a shift from **reactive inference** to **proactive context conditioning**.
+
+---
+
+## 2) Test-Time Compute vs Sleep-Time Compute: 시험 중 생각 vs 시험 전 복습
+
+The cleanest way to frame the difference is the analogy you asked for: **“시험 중 생각 vs 시험 전 복습.”**
+
+- **Test-Time Compute** is like the student who starts thinking only during the exam. The better they can think under pressure, the higher the chance of getting the right answer, but they also pay in time and cognitive load at the moment of truth.
+- **Sleep-Time Compute** is like studying and organizing notes **before** the exam. You prepare mental summaries, rehearse likely questions, and precompute useful patterns. When the exam starts, you are not blind-guessing under pressure.
+
+For an AI system:
+
+- **Test-Time Compute** runs when user query arrives.
+- **Sleep-Time Compute** runs during inactivity.
+
+In Letta’s framing, test-time scaling was already impressive: longer reasoning traces and heavier per-query thinking gave better results. Sleep-time compute asks: what if we keep doing that kind of thinking **between** queries?
+
+This can be represented like:
+
+- Raw context → `sleep_time()` transforms context into refined context `c'`.
+- At query time, answer with `T(q, c')` using a reduced budget `b` instead of all reasoning in the moment.
+
+That is effectively moving part of inference from latency-critical user paths into background compute windows.
+
+---
+
+## 3) Where sleep-time compute sits relative to classic memory tooling
+
+Before embracing this, I needed to separate it from adjacent ideas:
+
+### 3.1 Just retrieval? Not enough.
+
+RAG helps with factual grounding, but it still depends on search and reasoning at request time. It answers: “What docs are relevant now?”
+
+Sleep-time compute asks: “What in-memory structure should I prebuild so that this future question will be easier and cheaper?”
+
+### 3.2 Just context window scaling? Not enough.
+
+Bigger windows postpone the memory crisis, but they don’t solve repeated inference cost. You still recompute many things each turn.
+
+### 3.3 Just fine-tuning? Not enough.
+
+Fine-tuning can improve priors but is blunt and expensive for per-user adaptation. Sleep-time compute is dynamic and stateful, with per-context refinement as a first-class operation.
+
+So sleep-time compute is closest to a **stateful memory operator**: it reorganizes and precomputes inside memory structures that are then used repeatedly.
+
+---
+
+## 4) The architecture pattern I found most convincing: two agents, one memory loop
+
+In the official Letta material and codebase, the architecture is simple in principle but easy to under-implement in practice.
+
+I found the most important pattern was:
+
+1. A **primary conversational agent** (fast, user-facing)
+2. A **sleep-time agent** (heavier, background, memory-editing capability)
+
+The key separation is subtle but crucial: the sleep-time agent is responsible for memory shaping; the primary agent is responsible for user interaction and tools.
+
+In tests I simulated locally, this avoids conflating user-facing behavior with expensive self-reflection cycles.
+
+### Why this split helps
+
+- The primary agent stays lightweight and deterministic under user load.
+- The sleep-time agent can think deeply, call specialized tools, and update memory blocks.
+- Both agents share the same stored context but with strict roles.
+
+In other words, this is not just “run a background task.” It is a controlled separation of **who is allowed to mutate memory** and **when that mutation is expected**.
+
+---
+
+## 5) Actual `rethink_memory()` implementation pattern (the part that matters)
+
+The phrase *`rethink_memory()`* is easy to treat like a slogan, but in the code-level pattern I observed, it is an actual callable tool function with update semantics.
+
+Here is the exact contract I used as a reference (from the Letta implementation style):
+
+```python
+def rethink_memory(agent_state, new_memory: str, target_block_label: Optional[str], source_block_label: Optional[str]) -> Optional[str]:
+    # create or update the target memory block
+    if target_block_label is not None:
+        if agent_state.memory.get_block(target_block_label) is None:
+            agent_state.memory.create_block(label=target_block_label, value=new_memory)
+        agent_state.memory.update_block_value(label=target_block_label, value=new_memory)
+    return None
+```
+
+A stop condition function exists too:
+
+```python
+def finish_rethinking_memory(agent_state):
+    return None
+```
+
+The practical loop I extract from this is:
+
+- Sleep agent receives context and the instruction set (examples, persona, constraints).
+- It writes intermediate thoughts to a shared block such as `rethink_memory_block`.
+- It may repeatedly call `rethink_memory()` to refine the memory artifact: deduplication, contradiction checks, derived inferences, likely future answers, etc.
+- It calls `finish_rethink` when no additional useful derivation is needed.
+
+In the research scripts, this usually looks like:
+
+- create a new memory block (`rethink_memory_block`)
+- create both agents
+- register custom tools from function references
+- send a trigger message like `"[trigger_rethink_memory] New situation: ..."`
+- process sleep agent first, then use the updated memory with the conversation agent
+
+I especially like this pattern for one reason: it avoids ad-hoc, freeform prompt hacks. Instead, you get a deterministic API shape for memory updates.
+
+---
+
+## 6) The “function-calling” trick: `rethink_memory` + memory blocks as a protocol
+
+When people first hear this, they ask: “Aren’t they just trying to do reasoning twice?”
+
+Not exactly. The point is to choose **what to store once** and reuse it many times.
+
+The memory blocks become protocol objects:
+
+- `human`: high-level task frame and constraints
+- `persona`: behavior style and reasoning expectations
+- `rethink_memory_block`: synthesized artifact reused at answer time
+
+A typical prompt set for a sleep agent includes explicit instruction to:
+
+- write compact, actionable inferences
+- avoid useless verbosity
+- validate computations
+- remove redundant entries
+- return to calling when done
+
+A practical detail from experiments: sleep-time agent output is not sent directly to users; it’s first-class internal state. That means you can:
+
+- inspect it for quality
+- gate it
+- optionally reject or roll back malformed edits
+
+So sleep-time compute is not “hidden uncontrolled magic.” It can be a **controlled background compiler pass** for memory.
+
+---
+
+## 7) What the paper measured (and what I think it means)
+
+The arXiv paper (“Sleep-time Compute: Beyond Inference Scaling at Test-time”) reported large efficiency gains on two benchmark families (Stateful GSM-Symbolic and Stateful AIME), with two points that matter most for implementation:
+
+- **~5x lower test-time compute for same accuracy** (under certain setups)
+- **Accuracy gains when scaling sleep-time compute** up to roughly 13% (GSM-Symbolic) and up to 18% (AIME)
+
+They also introduced a **Multi-Query** variant where many questions share one context. In that scenario, sleep-time precomputation amortizes across queries and can reduce **average cost per query about 2.5x**.
+
+What this implies operationally:
+
+- If your workload is **repetitive per context** (finance status updates, project docs, recurring ticket triage), sleep-time is very attractive.
+- If every user query is radically unique and unpredictable, your return may be lower, because less precompute is reusable.
+
+I found this distinction very practical: in some support systems, 80% of follow-ups are predictable (same context, new angle). In those systems, background consolidation is almost always worth the overhead.
+
+---
+
+## 8) Where it shines: predictability and repetitive context patterns
+
+I built a mental rule-of-thumb from both papers and implementation:
+
+**High predictability + recurring context + hard latency SLO** → start with sleep-time compute.
+
+Examples:
+
+- Onboarding assistants that continuously answer follow-up questions from a stable corpus.
+- Code agents that read and reason over long-lived repos.
+- Personal workspace assistants that must answer multiple queries across the same meeting notes.
+
+In those settings, the sleep agent can precompute candidate answer pathways, edge cases, and assumptions. Then each query is no longer a full reconstruction problem.
+
+I also noticed that when the context gets noisy (many unrelated documents, weakly related user history), background runs can start “hallucinating structure” inside memory. That’s a trade-off I’ll revisit in section 11.
+
+---
+
+## 9) Why this is different from Nightly jobs or cron-driven Heartbeat
+
+I run scheduled workflows too. So I wanted to separate two similar-looking concepts:
+
+- **Heartbeat/Nightly tasks**: periodic external work, usually event collection or maintenance.
+- **Sleep-time compute**: internal cognitive preparation over already-understood context.
+
+They are complementary, not interchangeable.
+
+A heartbeat system can fetch new messages, calendar events, weather, or repo commits. Sleep-time compute then processes these semantically, compresses them, and updates long-term memory so retrieval at response time is cleaner and faster.
+
+So in a system like mine, I’d schedule as:
+
+1. heartbeat collects new external facts
+2. sleep agent consolidates those facts with priors
+3. online agent serves the final answer from refined context
+
+This reduces repeated expensive grounding and avoids rebuilding understanding at every query.
+
+---
+
+## 10) Implementation checklist I use when prototyping this
+
+I keep going back to a practical sequence, and it has worked well:
+
+### Step 1) Decide what belongs in persistent memory
+
+Not everything can go in memory. I use a 3-tier rule:
+
+- **Raw facts** in archival storage (traceability)
+- **Operational memory** in working blocks (short-medium horizon)
+- **Refined memory** only for high-confidence, high-reuse insight
+
+### Step 2) Define `rethink_memory` contract upfront
+
+I explicitly define:
+
+- Input expected length/format
+- Which block can be overwritten vs appended
+- Validation rule: if it cannot be verified, write uncertainty and confidence rather than fake certainty
+- Stop condition: call `finish_rethinking` only when convergence criteria are met
+
+### Step 3) Separate roles
+
+Primary agent does not mutate high-level memory unless policy needs it. Sleep-time agent gets stronger models (if latency tolerance allows) and heavier context windows.
+
+### Step 4) Build a safety gate
+
+Before memory becomes globally visible:
+
+- log edits
+- score by rule checks
+- optionally run a cheap verifier pass
+- discard pathological loops
+
+### Step 5) Measure with both efficiency and quality
+
+It’s easy to optimize for one side only.
+
+Track:
+
+- tokens used at sleep-time vs test-time
+- latency percentile for user queries
+- hallucination rate in refreshed blocks
+- stale-memory frequency
+
+I usually treat a deployment as successful only when both latency and quality improve simultaneously.
+
+---
+
+## 11) Risks I take seriously
+
+### 11.1 Privacy and memory governance
+
+If the system keeps editing its own memory, “Who decides what to erase?” becomes a legal and ethical question. In regions with strict privacy expectations, this is not a technical side note.
+
+You need explicit policy around:
+
+- retention windows
+- consent scope
+- auditability of memory edits
+- recovery path for incorrect memory consolidation
+
+### 11.2 Energy / cost profile inversion
+
+You may move cost out of user-facing windows into background windows, but that is only cheaper if you plan for utilization correctly. Idle capacity is not free capacity; it’s still resource consumption.
+
+I’ve started thinking in terms of a compute budget per context:
+
+- small contexts: skip sleep-time passes unless quality gain is clear
+- large repetitive contexts: precompute aggressively
+
+### 11.3 Correctness drift during consolidation
+
+Because the sleep agent is autonomous, it can overfit or over-derive if prompts are not constrained. The memory block can quietly become a source of synthetic confidence.
+
+I now add “proof-carrying updates” whenever possible:
+- short list of why an inference is valid
+- source pointers to the underlying context
+- explicit uncertainty markers for calculations
+
+---
+
+## 12) Where Korea enters the picture: a fast-forward signal
+
+Even if you’re not building in Seoul or Busan, this topic matters in Korea because enterprise stacks here are already moving from chatbot-like systems to **agentic workflows**.
+
+The important signal for me was the coverage that Samsung AI Forum 2025 highlighted **Sleep-time Compute** in the context of the agentic shift. The official event coverage shows deep interest in moving from generation-centric models toward agents that use idle interaction gaps for reasoning and planning.
+
+That matters because our market already has patterns that fit this model: smart devices, on-device assistants, and enterprise chat systems where interactions are bursty and repetitive. If Korean products adopt this carefully, users may start seeing assistants that “learn continuously” over a day without waiting for every query to trigger expensive deep reasoning.
+
+So this is not merely an academic model; it’s becoming an engineering posture.
+
+---
+
+## 13) Comparison with a practical Korean workflow
+
+Let me map this to a concrete system I understand well:
+
+- A personal work agent monitors notes, tasks, mails, and docs.
+- Every day, it receives many short updates.
+- Users ask follow-up questions that reuse same context repeatedly.
+
+Without sleep-time compute:
+
+- each follow-up does heavy interpretation from scratch
+- duplicate reasoning accumulates
+
+With sleep-time compute:
+
+- an idle pass distills recurring structures
+- daily updates are integrated into compact summaries
+- follow-ups become retrieval-plus-light-reasoning problems
+
+Users feel this as smoother replies and fewer “I need context, let me search again” moments.
+
+---
+
+## 14) The strategic takeaway (for me)
+
+For my own work, I now use this rule:
+
+- Use pure test-time compute when the query is unique, high-variance, or safety-critical where fresh reasoning is mandatory.
+- Use sleep-time compute when the context repeats, the domain is knowledge-heavy, and responsiveness matters.
+
+This is not either-or. It’s a **compute portfolio**:
+
+- background cognition for stable memory
+- foreground cognition for surprises
+
+If you want an operational metaphor: test-time is your **race car engine** that starts only on demand. Sleep-time compute is your **engine tuning process** done at night, so each lap is faster.
+
+---
+
+## 15) What I’m watching next
+
+I will keep an eye on three signals:
+
+1. How open frameworks add explicit confidence tags to memory blocks
+2. Whether vendors expose memory edits with audit trails by default
+3. Whether context-level cost APIs become first-class in agent orchestration layers
+
+Until then, my own baseline is to keep `rethink_memory()` narrow and inspectable.
+
+In practice, I want the memory system to be powerful enough to help my agents answer better tomorrow, but not so autonomous that I cannot explain why they changed their mind.
+
+Sleep-time compute gave me a mental model for that balance.
+
+---
+
+## References
+
+- arXiv: [Sleep-time Compute: Beyond Inference Scaling at Test-time](https://arxiv.org/abs/2504.13171)
+- Letta blog: [Sleep-time Compute](https://www.letta.com/blog/sleep-time-compute)
+- Letta code repo: [letta-ai/sleep-time-compute](https://github.com/letta-ai/sleep-time-compute)
+- Letta sleep-time docs (official portal): [docs.letta.com](https://docs.letta.com)
+- Samsung AI Forum 2025 coverage: [Samsung Newsroom](https://news.samsung.com/kr/%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90-%EC%82%BC%EC%84%B1-ai-%ED%8F%AC%EB%9F%BC-2025-%EA%B0%9C%EC%B5%9C)
