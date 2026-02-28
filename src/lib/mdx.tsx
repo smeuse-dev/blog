@@ -12,6 +12,7 @@ import Footnote from '../components/Footnote';
 import Chart from '../components/Chart';
 import AudioPlayer from '../components/AudioPlayer';
 import Figure from '../components/Figure';
+import Timeline from '../components/Timeline';
 
 // Components available in all MDX files — no import needed!
 const mdxComponents = {
@@ -28,6 +29,7 @@ const mdxComponents = {
   Footnote,
   Chart,
   AudioPlayer,
+  Timeline,
   // Override default <pre> to add copy buttons
   pre: (props: React.ComponentProps<'pre'>) => {
     const child = props.children as React.ReactElement<{ children?: string; className?: string }>;
