@@ -1,0 +1,375 @@
+---
+title: "Zero Trust AI Security: Defending Production ML Systems"
+date: "2026-02-11"
+description: "How to apply zero trust principles to AI systems in production. From model poisoning defense to supply chain security, adversarial robustness, and NIST AI RMF implementation."
+tags: ["security","zero-trust","ai-safety","adversarial","model-security"]
+series: "The 2026 AI Agent Deep Dive"
+seriesOrder: 22
+---
+
+> **TL;DR:**
+>
+Zero trust architecture for AI isn't optional anymore—it's survival. This post covers how to defend production ML systems against model poisoning, adversarial attacks, supply chain compromises, and insider threats. We'll walk through the NIST AI Risk Management Framework, red teaming methodologies, and practical hardening strategies that work in 2026.
+
+
+## The Problem: AI Systems Are High-Value Targets
+
+Traditional security assumes trust within the network perimeter. Zero trust assumes **breach by default**—verify everything, trust nothing.
+
+For AI systems, this mindset is critical. Why?
+
+- **Model theft**: A trained model represents millions in compute and IP
+- **Data poisoning**: Corrupted training data = corrupted decisions
+- **Adversarial inputs**: Crafted inputs that fool the model
+- **Supply chain attacks**: Compromised dependencies, pre-trained models, datasets
+- **Model inversion**: Extracting training data from deployed models
+
+The attack surface is massive. The stakes are higher.
+
+## Zero Trust Principles for AI
+
+Traditional zero trust focuses on identity, devices, and networks. For AI, we expand:
+
+### 1. **Never Trust, Always Verify**
+
+Every component in the ML pipeline must be authenticated and validated:
+
+- Training data sources
+- Pre-trained models
+- Dependencies (PyTorch, TensorFlow, transformers)
+- Inference requests
+- Model outputs
+
+<Terminal>
+# Example: Verifying a pre-trained model checksum
+sha256sum model.safetensors
+# Compare against known-good hash from official source
+echo "a3f2b8... model.safetensors" | sha256sum -c
+</Terminal>
+
+### 2. **Least Privilege Access**
+
+Segregate permissions across the ML lifecycle:
+
+- **Data scientists**: Read training data, write to experiment tracking
+- **ML engineers**: Deploy models, read inference logs
+- **Models**: Access only necessary APIs, no internet by default
+- **Inference services**: Read model weights, write predictions—nothing else
+
+### 3. **Assume Breach**
+
+Design systems expecting compromise:
+
+- **Immutable infrastructure**: Models deployed as read-only containers
+- **Audit logging**: Every prediction, every access, timestamped and signed
+- **Anomaly detection**: Monitor for unusual inference patterns
+- **Kill switches**: Rapid model rollback and quarantine capabilities
+
+## Model Poisoning Defense
+
+Poisoning attacks inject malicious data into training sets. The model learns to fail on specific inputs—or always.
+
+### Detection Strategies
+
+**1. Data Provenance Tracking**
+
+Log every data point's origin, transformations, and lineage:
+
+<Terminal output={`# Example: Cryptographic data manifest
+{
+  "dataset_id": "train-20260210",
+  "records": 1000000,
+  "hash": "sha256:b4c8d2...",
+  "sources": [
+    {"origin": "crawl-20260201", "verified": true, "signer": "data-team-key"},
+    {"origin": "user-uploads", "verified": false, "flagged": 127}
+  ]
+}`} />
+
+**2. Outlier Detection**
+
+Use statistical methods to flag anomalous training samples:
+
+- Label flipping detection (compare labels to nearest neighbors)
+- Feature distribution analysis (detect out-of-distribution samples)
+- Gradient analysis (identify samples with unusual loss gradients)
+
+**3. Robust Training Techniques**
+
+- **RONI (Reject On Negative Impact)**: Remove samples that hurt validation performance
+- **Differential Privacy**: Limit individual sample influence on model weights
+- **Byzantine-robust aggregation**: For federated learning scenarios
+
+### Validation Pipelines
+
+Before training:
+
+1. **Schema validation**: Ensure data matches expected structure
+2. **Range checks**: Flag impossible values (age = -5, probability = 1.2)
+3. **Duplication detection**: Identify suspiciously repeated samples
+4. **Source reputation scoring**: Weight data by provenance trust level
+
+## Adversarial Attack Defense
+
+Adversarial examples are inputs crafted to fool models—often imperceptible to humans.
+
+### Attack Types
+
+- **Evasion attacks**: Modify inputs at inference time (e.g., stickers on stop signs)
+- **Poisoning attacks**: Insert backdoors during training
+- **Model extraction**: Query the model to steal its logic
+- **Membership inference**: Determine if a sample was in training data
+
+### Defense Techniques
+
+**1. Adversarial Training**
+
+Include adversarial examples in training:
+
+<Terminal>
+# Pseudocode: Fast Gradient Sign Method (FGSM) augmentation
+for batch in train_loader:
+    # Normal forward pass
+    loss = model(batch)
+    
+    # Generate adversarial examples
+    gradient = compute_gradient(loss, batch)
+    adversarial_batch = batch + epsilon * sign(gradient)
+    
+    # Train on both clean and adversarial
+    combined_loss = loss(batch) + loss(adversarial_batch)
+    combined_loss.backward()
+</Terminal>
+
+**2. Input Sanitization**
+
+- **Preprocessing defenses**: JPEG compression, bit-depth reduction
+- **Feature squeezing**: Reduce input color/bit depth to destroy adversarial noise
+- **Randomization**: Add random transformations at inference
+
+**3. Detection Mechanisms**
+
+- **Confidence thresholding**: Reject low-confidence predictions
+- **Ensemble disagreement**: Flag inputs where multiple models disagree
+- **Statistical testing**: Detect distributional shifts in input features
+
+**4. Certified Defenses**
+
+Provable robustness guarantees (expensive but valuable for critical systems):
+
+- Randomized smoothing
+- Lipschitz-constrained networks
+- Interval bound propagation
+
+## Supply Chain Security for ML
+
+The ML supply chain is fragmented and risky:
+
+- **Pre-trained models**: Hugging Face, OpenAI, Anthropic, Meta
+- **Datasets**: Kaggle, Common Crawl, proprietary scrapes
+- **Libraries**: PyTorch, TensorFlow, scikit-learn, numpy
+- **Infrastructure**: AWS SageMaker, Azure ML, GCP Vertex AI
+
+### Threat Vectors
+
+1. **Compromised model weights**: Malicious actors upload backdoored checkpoints
+2. **Dependency confusion**: Typosquatting (e.g., `torch` vs `troch`)
+3. **Malicious packages**: PyPI/npm packages with hidden payloads
+4. **Dataset poisoning**: Corrupted data hosted on public platforms
+
+### Mitigation Strategies
+
+**1. Model Verification**
+
+- **Checksum validation**: Always verify SHA-256 hashes
+- **Signature verification**: Use GPG/code signing for official releases
+- **Sandboxed testing**: Load models in isolated environments first
+
+<Terminal>
+# Example: Verifying a Hugging Face model
+from transformers import AutoModel
+import hashlib
+
+model = AutoModel.from_pretrained("bert-base-uncased")
+# Verify weights haven't been tampered with
+expected_hash = "a3f2b8c4d5e6f7..."
+actual_hash = hashlib.sha256(model.state_dict()).hexdigest()
+assert actual_hash == expected_hash, "Model integrity check failed!"
+</Terminal>
+
+**2. Dependency Pinning**
+
+Lock dependencies to specific versions:
+
+<Terminal>
+# requirements.txt with exact versions
+torch==2.1.0+cu118
+transformers==4.36.0
+numpy==1.24.3
+</Terminal>
+
+**3. Private Registries**
+
+Mirror dependencies internally:
+
+- Host vetted models on internal artifact storage
+- Use private PyPI mirrors (e.g., Artifactory, Nexus)
+- Air-gap critical production environments
+
+**4. Software Bill of Materials (SBOM)**
+
+Track every component:
+
+<Terminal>
+# Example: Generating an SBOM with syft
+syft packages dir:/path/to/ml-project -o json > sbom.json
+</Terminal>
+
+## AI Red Teaming
+
+Red teaming simulates adversary behavior to find vulnerabilities before attackers do.
+
+### Red Team Objectives
+
+1. **Bypass authentication**: Access model APIs without credentials
+2. **Extract training data**: Membership inference, model inversion
+3. **Cause misclassification**: Adversarial examples, prompt injection
+4. **Denial of service**: Resource exhaustion, adversarial inputs
+5. **Privilege escalation**: Gain admin access via model outputs
+
+### Red Team Methodologies
+
+**1. Black-Box Testing**
+
+Query the model as an external attacker:
+
+- Submit edge cases (empty inputs, massive inputs, unicode exploits)
+- Probe for prompt injection vulnerabilities (LLMs)
+- Test rate limiting and authentication
+
+**2. White-Box Testing**
+
+Full access to model architecture and weights:
+
+- Generate optimal adversarial examples (PGD, C&W attacks)
+- Analyze gradients for backdoor detection
+- Extract decision boundaries
+
+**3. Automated Tools**
+
+- **CleverHans**: Adversarial example library
+- **Foolbox**: Framework for robustness evaluation
+- **TextAttack**: NLP-specific adversarial attacks
+- **ART (Adversarial Robustness Toolbox)**: IBM's defense library
+
+<Terminal>
+# Example: Generating adversarial examples with CleverHans
+from cleverhans.torch.attacks.projected_gradient_descent import projected_gradient_descent
+
+adversarial_x = projected_gradient_descent(
+    model, x, eps=0.3, eps_iter=0.01, nb_iter=40
+)
+</Terminal>
+
+### Continuous Red Teaming
+
+Integrate red teaming into CI/CD:
+
+1. **Pre-deployment scanning**: Run adversarial test suites before production
+2. **Bug bounties**: Incentivize external researchers
+3. **Simulation environments**: Deploy honeypot models to study attacker behavior
+
+## NIST AI Risk Management Framework
+
+The NIST AI RMF provides structured governance for AI risk.
+
+### Core Functions
+
+**1. GOVERN**
+
+- Establish AI risk culture and accountability
+- Define roles (AI safety officer, model owner, red team)
+- Create policies for acceptable use, data handling, model deployment
+
+**2. MAP**
+
+- Identify AI use cases and risk categories
+- Map data flows, dependencies, and stakeholders
+- Assess impact (financial, reputational, safety, legal)
+
+**3. MEASURE**
+
+- Define metrics: accuracy, fairness, robustness, interpretability
+- Monitor model drift, adversarial robustness scores
+- Track incidents (false positives, adversarial successes)
+
+**4. MANAGE**
+
+- Implement controls: input validation, access control, audit logging
+- Prioritize risks (likelihood × impact)
+- Plan mitigations: adversarial training, model ensembles, human-in-the-loop
+
+### Practical Implementation
+
+<Terminal>
+# Example: AI risk registry (risks.yaml)
+risks:
+  - id: RISK-001
+    title: "Adversarial image inputs"
+    likelihood: high
+    impact: medium
+    mitigations:
+      - "Adversarial training on ImageNet-C"
+      - "Input preprocessing (JPEG compression)"
+      - "Ensemble voting (3+ models)"
+    status: mitigated
+    owner: ml-security-team
+</Terminal>
+
+## Practical Hardening Checklist
+
+### Before Training
+
+- [ ] Validate data sources (checksums, signatures)
+- [ ] Run outlier detection on training data
+- [ ] Enable data provenance logging
+- [ ] Scan dependencies for vulnerabilities (Snyk, Dependabot)
+
+### During Training
+
+- [ ] Use differential privacy (ε &lt; 1.0 for sensitive data)
+- [ ] Log all hyperparameters and random seeds
+- [ ] Enable experiment tracking (MLflow, Weights & Biases)
+- [ ] Run adversarial validation checks
+
+### Before Deployment
+
+- [ ] Red team the model (black-box + white-box)
+- [ ] Generate adversarial robustness report
+- [ ] Verify model checksums
+- [ ] Test rollback procedures
+
+### In Production
+
+- [ ] Rate-limit inference APIs
+- [ ] Log every prediction with request metadata
+- [ ] Monitor for input drift (KL divergence, Wasserstein distance)
+- [ ] Set up alerting for anomalous patterns
+- [ ] Maintain kill switch for rapid model quarantine
+
+## Conclusion: Security Is Not Optional
+
+Zero trust for AI isn't paranoia—it's pragmatism. The attack surface is too large, the consequences too severe.
+
+Start small:
+
+1. **Verify your dependencies** (checksums, SBOMs)
+2. **Log everything** (inputs, outputs, access)
+3. **Red team quarterly** (internal or external)
+4. **Adopt NIST AI RMF** (even a lightweight version)
+
+The adversaries are already here. The question is whether you'll detect them in time.
+
+---
+
+**Next in series**: Privacy-preserving ML techniques (federated learning, homomorphic encryption, secure multi-party computation). How to train models without seeing the data.

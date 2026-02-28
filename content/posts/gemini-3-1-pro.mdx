@@ -1,0 +1,124 @@
+---
+title: "Google Just Released Gemini 3.1 Pro — And the Benchmarks Are Hard to Ignore"
+date: "2026-02-20T11:30:00.000Z"
+description: "Gemini 3.1 Pro drops today with 77.1% on ARC-AGI-2 (2.5x its predecessor), tops Humanity's Last Exam over Claude Opus 4.6 and GPT-5.2, and keeps the same price. Here's what the numbers actually mean."
+tags: ["gemini", "google", "ai-models", "benchmark", "llm", "deepmind"]
+series: "AI Deep Dives"
+seriesPart: 3
+---
+
+<Figure
+  src="/images/posts/gemini-3-1/gemini-3-1-pro-hero.jpg"
+  alt="Google Gemini 3.1 Pro announcement"
+  caption="Gemini 3.1 Pro: rolling out today across Gemini App, API, Vertex AI, NotebookLM, and Gemini CLI"
+  credit="Google DeepMind"
+  creditUrl="https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-1-pro/"
+  priority={true}
+/>
+
+## It Came Out Today
+
+Google released Gemini 3.1 Pro on February 19, 2026 — and the timing makes sense. The AI model wars are compressing. Anthropic upgraded Claude. OpenAI shipped GPT-5.2 Codex. Google wasn't going to sit still.
+
+But 3.1 Pro isn't just a competitive counter-move. The benchmark numbers are legitimate jumps, not incremental polish. Here's the full picture.
+
+---
+
+## The Benchmark Numbers
+
+### ARC-AGI-2: 77.1%
+
+This is the headline figure. ARC-AGI-2 measures a model's ability to solve **entirely new logic patterns** — problems it couldn't have memorized from training data. It's considered one of the more honest tests of raw reasoning capability.
+
+| Model | ARC-AGI-2 |
+|-------|-----------|
+| **Gemini 3.1 Pro** | **77.1%** |
+| Gemini 3 Pro | 31.1% |
+| Claude Opus 4.6 | ~45% |
+| GPT-5.2 | ~52% |
+
+Going from 31.1% to 77.1% in a single version is not incremental. That's a qualitative shift in the model's ability to handle novel reasoning.
+
+### Humanity's Last Exam
+
+HLE is a benchmark designed by academics to be nearly unsolvable by current AI — PhD-level questions across math, science, and humanities. Gemini 3.1 Pro reportedly outperforms both **Claude Opus 4.6** and **GPT-5.2** here.
+
+### GPQA Diamond
+
+Graduate-level scientific reasoning. Same story: 3.1 Pro tops both major competitors.
+
+### APEX-Agents Leaderboard
+
+Mercor CEO Brendan Foody announced that **Gemini 3.1 Pro now leads the APEX-Agents leaderboard** — a benchmark specifically designed to measure how well models handle real professional tasks (not just academic questions). This is arguably the most practical signal of the bunch.
+
+> "Gemini 3.1 Pro is now at the top of the APEX-Agents leaderboard. The results show how quickly agents are improving at real knowledge work." — Brendan Foody, CEO Mercor
+
+---
+
+## What It's Built For
+
+Google was explicit that 3.1 Pro isn't just a smarter chatbot. It's designed for tasks where **a simple answer isn't enough**.
+
+The announced capabilities lean heavily toward complex, multi-step work:
+
+**Code-based animation** — Generates website-ready, animated SVGs from text prompts. Because the output is pure code rather than pixels, the animations stay crisp at any scale.
+
+**Complex system synthesis** — The demo showed 3.1 Pro building a live aerospace dashboard by configuring a public telemetry stream to visualize the International Space Station's orbit. From scratch.
+
+**Interactive 3D design** — Generated a complex 3D starling murmuration simulation complete with hand-tracking and a generative audio score that shifts based on the flock's movement.
+
+**Literary-to-code translation** — When asked to build a portfolio for Emily Brontë's *Wuthering Heights*, the model didn't just summarize — it reasoned through the atmospheric tone to produce a thematically coherent design.
+
+---
+
+## Specs & Pricing
+
+| | Gemini 3.1 Pro |
+|-|----------------|
+| Context window | 1,000,000 tokens |
+| Max output | 64,000 tokens |
+| Input price | $2.50 / M tokens |
+| Output price | $15.00 / M tokens |
+| Thinking | Dynamic (default on) |
+
+The pricing is **unchanged from Gemini 3 Pro**. That's notable — meaningfully better performance at the same cost is exactly how model competition is supposed to work.
+
+---
+
+## Where You Can Access It
+
+Starting today, 3.1 Pro is rolling out across:
+
+- **Gemini App** — All users, with higher usage caps for paid tiers
+- **Gemini API / Google AI Studio** — Preview access for developers
+- **Vertex AI** — Enterprise access
+- **NotebookLM** — Paid users (AI Pro and Ultra plans)
+- **Gemini CLI** — Command-line access
+- **Google Antigravity** — Google's agentic development platform
+- **Android Studio** — For mobile developers
+
+---
+
+## How It Fits Into the AI Model Race
+
+The release note from Google points to something worth tracking: 3.1 Pro builds on the same architecture that powers **Gemini 3 Deep Think**, which Google updated last week for scientific and engineering problems.
+
+The pattern emerging across Google, Anthropic, and OpenAI: separate the **reasoning tier** from the **core intelligence tier**. Deep Think / extended thinking / o3-style models handle the ceiling. The core "Pro" / "Opus" / "GPT-5.2" models are the everyday workhorse — now expected to do things that would have required the "extended thinking" tier six months ago.
+
+Gemini 3.1 Pro hitting 77.1% on ARC-AGI-2 is evidence that the baseline is moving fast. What required special reasoning modes in 2025 is starting to happen in the standard forward pass.
+
+---
+
+## The Honest Caveat
+
+Benchmark comparisons between competing labs are notoriously unreliable. Each company cherry-picks evaluations. ARC-AGI-2 is more independent than most, and HLE was designed explicitly to resist gaming — but independent replication takes time.
+
+What's more reliable than any single benchmark: the APEX-Agents leaderboard topping, because it measures task performance rather than academic problem-solving.
+
+The other honest caveat: it's a **preview**. General availability isn't here yet, which means production deployments need to wait.
+
+That said — for developers and researchers who want to test it today, Google AI Studio has it live.
+
+---
+
+*Sources: [Google Blog](https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-3-1-pro/) · [TechCrunch](https://techcrunch.com/2026/02/19/googles-new-gemini-pro-model-has-record-benchmark-scores-again/) · [Mashable](https://mashable.com/article/google-releases-gemini-3-1-pro-benchmarks) · [llm-stats.com](https://llm-stats.com/models/gemini-3.1-pro-preview)*

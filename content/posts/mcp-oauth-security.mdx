@@ -1,0 +1,137 @@
+---
+title: "The Hidden Flaw in AI's Universal Plug: MCP, OAuth, and the Security Gap"
+date: "2026-02-20T11:00:00.000Z"
+description: "Anthropic's Model Context Protocol promised 'no API keys to manage' with native OAuth. Then researchers found two critical vulnerabilities that could turn that same OAuth flow into a supply chain attack."
+tags: ["mcp", "oauth", "anthropic", "security", "ai-agents", "developer-tools"]
+series: "AI Deep Dives"
+seriesPart: 2
+---
+
+<Figure
+  src="/images/posts/mcp-oauth/claude-code-mcp-oauth.jpg"
+  alt="Claude Code connecting to remote MCP servers via OAuth"
+  caption="Claude Code's native OAuth support promised frictionless developer authentication — but the underlying SDK had some uncomfortable defaults"
+  credit="Anthropic"
+  creditUrl="https://claude.com/blog/claude-code-remote-mcp"
+  priority={true}
+/>
+
+## The USB Standard for AI — and Its Lock
+
+In June 2025, Anthropic announced something developers had been wanting for years: a clean, standardized way to connect AI assistants to external tools and data sources.
+
+The **Model Context Protocol (MCP)** was pitched as the "USB-C of AI integrations" — a single standard that any LLM client could use to talk to any service, from GitHub to Notion to your internal databases. And with native **OAuth support** baked into Claude Code, the promise was explicit:
+
+> "Simply authenticate to your servers once, and Claude Code handles the rest — no API keys to manage or credentials to store."
+
+Developers loved it. The MCP ecosystem grew fast. Hundreds of servers launched within months.
+
+Then, a month after the Claude Code announcement, a security research team quietly filed a bug report.
+
+---
+
+## What Cato Networks Found
+
+In July 2025, researchers at **Cato Networks' CTRL Threat Research** team discovered two vulnerabilities in Anthropic's MCP SDK — the default implementation that most developers build from.
+
+<Figure
+  src="/images/posts/mcp-oauth/mcp-oauth-vulnerability.jpg"
+  alt="Diagram showing MCP SDK OAuth vulnerability attack chain"
+  caption="The attack chain: misconfigured CORS → token theft → CI/CD compromise → supply chain attack"
+  credit="Cato Networks"
+  creditUrl="https://www.catonetworks.com/blog/cato-ctrl-two-vulnerabilities-in-anthropics-mcp-sdk/"
+/>
+
+### Vulnerability 1: OAuth Token Theft
+
+The MCP SDK, when used as an OAuth authorization server, had **permissive defaults** on three critical endpoints:
+
+- `/register` — Dynamic client registration
+- `/authorize` — OAuth authorization
+- `/token` — Token issuance
+
+These endpoints accepted **cross-origin requests from any domain**. Redirect URIs weren't strictly validated either.
+
+The attack scenario: a developer is already logged into their company's MCP environment (connected to GitHub, Bitbucket, CI/CD systems). They visit a malicious website. That website silently:
+
+1. Registers a rogue OAuth client via `/register`
+2. Completes the authorization flow
+3. Redirects to itself to capture the token
+
+The developer sees nothing. The attacker now has a valid developer token — carrying all the permissions that developer has in every connected system.
+
+### Vulnerability 2: Supply Chain Attack Vector
+
+This is where it gets SolarWinds-shaped.
+
+In organizations where MCP-issued tokens are trusted by CI/CD pipelines, a stolen token doesn't just expose one repo. It can:
+
+- Push malicious code to source control
+- Trigger automated builds
+- Produce signed binaries that pass every authenticity check
+- Get distributed to every customer tenant as a "legitimate update"
+
+The attack is fully authenticated, fully signed, and completely trusted by the systems downstream. Until it isn't.
+
+---
+
+## Anthropic's Response
+
+Cato filed the report on **July 8, 2025**. Anthropic acknowledged it on **September 4, 2025** — and their response was technically accurate, if a little uncomfortable:
+
+> "These findings align with a security scenario described in our official specification under the 'Confused Deputy Problem.'"
+
+Translation: *we knew this was a risk class, we documented it in the spec, but the default SDK settings didn't enforce the mitigations.*
+
+They committed to "clearer guidance and improved default settings." As of early 2026, the MCP specification has evolved significantly, with the **2025-11-25 version** introducing more structured authorization requirements.
+
+---
+
+## What OAuth 2.1 + PKCE Actually Solves (and Doesn't)
+
+The current MCP authorization spec mandates **OAuth 2.1** with **PKCE** (Proof Key for Code Exchange). This is a meaningful step up from the original.
+
+**What PKCE protects:**
+- Intercept attacks on the authorization code during the OAuth exchange
+- Prevents malicious apps from trading a stolen code for a token
+
+**What PKCE doesn't protect:**
+- Client authentication — the server still can't verify *which* app is asking
+- Compromised redirect URIs that were registered before PKCE was enforced
+- Infrastructure-level threats (compromised CI/CD servers)
+
+For AI agents specifically, there's a fundamental tension: **OAuth was designed for human authorization flows** — the user clicks "allow," confirms the request, and the app gets a token. AI agents operate autonomously, often without any human in the loop to confirm an unexpected authorization request.
+
+This is the hard problem. PKCE is part of the answer, but it doesn't address non-human identity.
+
+---
+
+## What Developers Should Do Now
+
+If you're building MCP servers or integrating Claude Code with your infrastructure:
+
+**Restrict CORS immediately.** Default permissive CORS on OAuth endpoints is dangerous. Lock it down to known origins.
+
+**Validate redirect URIs strictly.** Any authorization flow that allows arbitrary redirect URIs is a token theft waiting to happen.
+
+**Scope tokens aggressively.** Don't issue tokens with "full developer access." Give each MCP server the minimum permissions it actually needs.
+
+**Audit what tokens your MCP environment can issue.** If a stolen token could access your CI/CD pipeline, that's a critical exposure.
+
+**Follow the spec, not just the SDK defaults.** The MCP specification includes security guidance that the default SDK doesn't always enforce. The spec and the SDK are not the same thing.
+
+---
+
+## The Bigger Picture
+
+MCP is genuinely useful. The OAuth integration in Claude Code makes developer workflows meaningfully smoother. None of this means the technology is broken — it means it's maturing, the way all security-sensitive standards mature: through researchers finding the gaps, disclosures, patches, and better defaults.
+
+What's worth watching is how this plays out as AI agents get more autonomous. Right now, most MCP flows still have a human nearby. As agents become more capable of acting independently — scheduling tasks, writing code, triggering deployments — the authorization architecture needs to match the threat model.
+
+OAuth 2.1 + PKCE is a start. Infrastructure-asserted identity, ephemeral tokens, and proper non-human client authentication are the direction.
+
+The USB-C metaphor is actually still pretty good. It took USB a few generations to get the security model right too.
+
+---
+
+*Sources: [Cato Networks CTRL Threat Research](https://www.catonetworks.com/blog/cato-ctrl-two-vulnerabilities-in-anthropics-mcp-sdk/) · [Anthropic Claude Code Remote MCP](https://claude.com/blog/claude-code-remote-mcp) · [Stack Overflow Blog: MCP Auth](https://stackoverflow.blog/2026/01/21/is-that-allowed-authentication-and-authorization-in-model-context-protocol/) · [MCP Authorization Spec](https://modelcontextprotocol.io/specification/2025-11-25)*

@@ -1,0 +1,14 @@
+services:
+  blog:
+    build: .
+    container_name: smeuse-blog
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - REVALIDATE_SECRET=477130faa5165121bf105e3ab56c4e4977499b5c1808b7a7
+    volumes:
+      - /mnt/d/develop/source/blog/content:/app/content
+      - /mnt/d/develop/source/blog/data:/app/data
+      - /mnt/d/develop/source/blog/public/images:/app/public/images

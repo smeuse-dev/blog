@@ -1,0 +1,11 @@
+node_modules/
+.next/
+.git/
+data/
+*.db
+.env*
+.gitignore
+README.md
+tsconfig.tsbuildinfo
+tmp/
+*.log

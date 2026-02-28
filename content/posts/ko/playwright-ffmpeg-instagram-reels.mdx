@@ -1,0 +1,271 @@
+---
+title: "Playwright + FFmpeg + Instagram Graph API로 릴스 자동화하기 (Node.js)"
+date: "2026-02-19T19:00:00.000Z"
+description: "HTML 프레임을 Playwright로 렌더링하고, FFmpeg으로 1080×1920 릴스 영상을 만들어 Instagram Graph API(media_type=REELS)로 자동 업로드하는 엔드-투-엔드 파이프라인 — 에러 처리, 토큰 갱신, 크론 스케줄링 포함."
+tags: ["playwright", "ffmpeg", "instagram", "automation", "nodejs", "instagram-graph-api", "reels", "content-automation", "instagram-api"]
+lang: "ko"
+---
+
+SNS는 매일 새로운 콘텐츠를 요구합니다. 타로 서비스라면 하루에 릴스 하나씩 — 훅, 카드 공개, 리딩, CTA. 이걸 매일 손으로 만들다가는 금방 지칩니다.
+
+그래서 파이프라인을 만들었습니다: **HTML → 스크린샷 → FFmpeg → Instagram Graph API**. 어떻게 만들었는지, 어디서 막혔는지 정리합니다.
+
+---
+
+## 전체 구조
+
+```
+HTML 템플릿 (장면별)
+    ↓ Playwright (헤드리스 Chrome, 1080×1920)
+PNG 프레임 (재생 시간 메타데이터 포함)
+    ↓ FFmpeg concat demuxer
+MP4 영상 (H.264, 30fps)
+    ↓ Instagram Graph API
+게시된 릴스
+```
+
+영상 편집 소프트웨어 없음. 수동 내보내기 없음. 코드만.
+
+---
+
+## Playwright로 프레임 생성하기
+
+릴스의 각 "장면"은 1080×1920(인스타그램 기본 해상도)으로 렌더링된 완전한 HTML 페이지입니다.
+
+```javascript
+import { chromium } from 'playwright';
+
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+await page.setViewportSize({ width: 1080, height: 1920 });
+
+await page.goto(`file://${htmlFile}`, { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(300); // 로컬 에셋 로드 대기
+await page.screenshot({ path: pngFile });
+await page.close();
+```
+
+**핵심 포인트:** 속도를 위해 `waitUntil: 'domcontentloaded'`를 사용하되, 모든 에셋은 반드시 로컬 `file://` 경로를 써야 합니다 — 헤드리스 모드에서 외부 URL은 로드가 불안정합니다.
+
+---
+
+## 카드 뒤집기 문제
+
+첫 번째 버전은 `scaleX`로 카드 뒤집기를 흉내냈습니다:
+
+```css
+/* ❌ 뒤집히는 게 아니라 눌리는 것처럼 보임 */
+.card { transform: scaleX(0.3); }
+```
+
+결과물이 이상했습니다 — 카드가 그냥 납작해졌다가 돌아오는 느낌. Gemini 2.0 Flash에게 코드 리뷰를 받고 나서 답이 보였습니다: **진짜 3D CSS 트랜스폼을 쓰면 됩니다.**
+
+```css
+/* ✅ 실제 3D 회전 */
+.scene { perspective: 1200px; }
+.card3d {
+  transform-style: preserve-3d;
+  transform: rotateY(90deg); /* 뒤집기 중간 지점 */
+}
+.face {
+  backface-visibility: hidden;
+  position: absolute;
+}
+.back-face {
+  transform: rotateY(180deg); /* 처음엔 숨겨져 있음 */
+}
+```
+
+Playwright는 정적 프레임을 캡처하므로, 회전 단계별로 프레임을 하나씩 생성합니다 (0° → 18° → 36° → ... → 180°). 각 프레임에 짧은 재생 시간을 부여하면, 이어 붙였을 때 진짜 3D 카드 뒤집기처럼 보입니다.
+
+---
+
+## FFmpeg으로 영상 합치기
+
+FFmpeg의 concat demuxer를 쓰면 프레임별 재생 시간을 지정할 수 있습니다 — 긴 장면(CTA: 2초)과 빠른 뒤집기 프레임(0.05초)을 자연스럽게 섞을 수 있어서 딱입니다.
+
+```
+# concat.txt
+file '/path/to/frame_00_hook.png'
+duration 2
+file '/path/to/frame_01_flip-s0.png'
+duration 0.07
+file '/path/to/frame_01_flip-s1.png'
+duration 0.06
+# ... 뒤집기 프레임 계속 ...
+file '/path/to/frame_02_result.png'
+duration 4
+file '/path/to/frame_02_result.png'  # 마지막 프레임 반복 (FFmpeg 요구사항)
+```
+
+```bash
+ffmpeg -y -f concat -safe 0 -i concat.txt \
+  -vf "format=yuv420p" \
+  -c:v libx264 -preset medium -crf 23 \
+  -r 30 -movflags +faststart \
+  output.mp4
+```
+
+`-movflags +faststart`는 인스타그램용으로 필수입니다 — moov atom을 파일 앞으로 옮겨서 로딩 중에도 재생이 시작되도록 합니다.
+
+---
+
+## 폰트 로딩: 조용한 함정
+
+Google Fonts(`@import url(...)`)는 `domcontentloaded` 모드에서 조용히 실패합니다. 아무 경고 없이 기본 sans-serif로 렌더링됩니다.
+
+해결책: 로컬 파일을 가리키는 `@font-face`로 시스템 폰트를 직접 사용하세요.
+
+```css
+@font-face {
+  font-family: 'NotoKR';
+  src: url('file:///usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
+       format('truetype');
+}
+body { font-family: 'NotoKR', sans-serif; }
+```
+
+대부분의 Linux 시스템에는 Noto CJK가 기본 설치되어 있습니다. 다운로드 불필요.
+
+---
+
+## Instagram Graph API로 업로드하기
+
+인스타그램 릴스 업로드는 3단계 과정입니다:
+
+```
+1. POST /{user_id}/media
+   → media_type=REELS, video_url=<공개 URL>
+   ← container_id
+
+2. GET /{container_id}?fields=status_code
+   → status_code = "FINISHED" 될 때까지 폴링
+
+3. POST /{user_id}/media_publish
+   → creation_id={container_id}
+   ← media_id (라이브 릴스)
+```
+
+**필수 조건:** 처리 중에 영상이 공개된 HTTPS URL에서 접근 가능해야 합니다. 저는 기존 Next.js 앱에서 임시로 서빙했습니다:
+
+```bash
+# public 폴더에 복사, 기존 도메인으로 서빙
+cp output.mp4 /path/to/nextjs/public/media/tmp-reel.mp4
+VIDEO_URL="https://yourdomain.com/media/tmp-reel.mp4"
+```
+
+영상 길이에 따라 처리 시간은 보통 20~60초입니다.
+
+---
+
+## 실패했던 것들 (그리고 수정법)
+
+| 문제 | 원인 | 해결 |
+|------|------|------|
+| 이미지가 빈 화면으로 표시됨 | `domcontentloaded` 모드에서 외부 URL | 모든 에셋을 로컬에 다운로드, `file://` 경로 사용 |
+| 카드가 눌리는 것처럼 보임 | `scaleX` 트랜스폼 | `rotateY` + `preserve-3d` 사용 |
+| 한글 폰트가 깨짐 | 헤드리스 환경에서 Google Fonts CDN 차단 | 시스템 NotoSansCJK로 로컬 `@font-face` |
+| 인스타그램에서 영상 거부 | `-movflags +faststart` 누락 | FFmpeg 인자에 추가 |
+
+---
+
+## 결과
+
+Playwright → FFmpeg 전체 파이프라인은 프레임 38개짜리 릴스 3편을 표준 Linux 서버에서 4분 이내에 처리합니다. 각 릴스는 약 750KB, 21초 분량입니다.
+
+카드 뒤집기 애니메이션이 핵심입니다: 0°→180° 회전을 10프레임으로 표현하되, ease-in-out 타이밍(중간은 빠르게, 끝은 느리게)을 적용해서 실제로 카드가 뒤집히는 것처럼 느껴집니다.
+
+---
+
+## 프로덕션 에러 처리
+
+대부분의 튜토리얼이 건너뛰는 부분 — 하지만 실제로 문제가 생기는 곳입니다.
+
+**토큰 만료**가 가장 흔한 실패입니다. 장기 토큰은 60일 후 만료됩니다. 일찍 잡으세요:
+
+```javascript
+async function uploadReel(videoUrl, caption) {
+  const res = await createContainer(videoUrl, caption);
+
+  // 토큰 만료 또는 취소
+  if (res.error?.code === 190) {
+    console.error('액세스 토큰 만료. 갱신 URL:', 
+      `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=OLD_TOKEN`
+    );
+    throw new Error('TOKEN_EXPIRED');
+  }
+
+  // 영상 포맷 거부
+  if (res.error?.code === 9004) {
+    throw new Error('VIDEO_FORMAT: 코덱(H.264), 해상도(1080x1920), 길이(3~90초) 확인');
+  }
+}
+```
+
+**컨테이너가 IN_PROGRESS에서 멈춤** — 타임아웃을 추가하세요:
+
+```javascript
+async function waitForContainer(containerId, maxWaitMs = 300_000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const { status_code } = await checkStatus(containerId);
+    if (status_code === 'FINISHED') return true;
+    if (status_code === 'ERROR') throw new Error('컨테이너 처리 실패');
+    await sleep(10_000);
+  }
+  throw new Error('5분 후 업로드 타임아웃');
+}
+```
+
+---
+
+## 크론으로 스케줄링하기
+
+파이프라인이 동작하면, 자동화하세요. 인스타그램 처리 중(보통 20~60초)에도 영상 URL이 접근 가능해야 하므로, 컨테이너가 `FINISHED`가 될 때까지 파일 서빙을 유지해야 합니다.
+
+```javascript
+// 매일 오전 7시 실행
+// cron: 0 7 * * *
+
+async function dailyReelsPipeline() {
+  const frames = await generateFrames();       // Playwright
+  const videoPath = await stitchVideo(frames); // FFmpeg
+  const publicUrl = await serveTemporarily(videoPath);
+  
+  const containerId = await createContainer(publicUrl, caption);
+  await waitForContainer(containerId);
+  const mediaId = await publishContainer(containerId);
+  
+  await cleanup(videoPath, publicUrl);
+  console.log(`게시 완료: ${mediaId}`);
+}
+```
+
+**인스타그램 속도 제한:** 계정당 24시간에 최대 50개 게시물 가능. 하루 한 편 릴스 스케줄은 여유롭습니다.
+
+---
+
+## 자주 발생하는 실패 (빠른 참조)
+
+| 에러 | 원인 | 해결 |
+|------|------|------|
+| `code: 190` | 토큰 만료 | 장기 토큰 갱신 |
+| `code: 9004` | 잘못된 영상 포맷 | H.264 + 1080×1920 + 3~90초 |
+| 컨테이너 `status: ERROR` | 영상 URL 접근 불가 | 처리 중 HTTPS URL 공개 상태 유지 |
+| 프레임에 한글 없음 | Google Fonts 로드 실패 | 시스템 폰트로 로컬 `@font-face` |
+| 프레임 이미지 빈 화면 | 외부 URL + `domcontentloaded` | 에셋 로컬 다운로드, `file://` 사용 |
+| 릴스 조용히 거부 | `-movflags +faststart` 누락 | FFmpeg 인자에 추가 |
+
+---
+
+## 다음에 해볼 것들
+
+- FFmpeg `-i audio.mp3 -shortest`로 배경음악 추가
+- 콘텐츠 데이터로 캡션 자동 생성
+- 시청 시간 최적화를 위한 훅 프레임 A/B 테스트
+
+파이프라인은 완전히 헤드리스로 돌아갑니다. 템플릿만 만들어두면 새 릴스는 크론 잡 하나면 됩니다.
+
+---
+
+*사용 스택: Node.js, Playwright 1.x, FFmpeg 6.x, Instagram Graph API v22*

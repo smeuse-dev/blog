@@ -1,0 +1,466 @@
+---
+title: "MemGPT/Letta: The Secret Behind 1 Million Stateful Agents — Memory as OS"
+date: "2026-02-28T11:00:00.000Z"
+description: "MemGPT의 이론이 Letta에서 실제 플랫폼으로 성숙하면서 100만 개급 Stateful Agent 운영이 가능해진 이유를 Core/Recall/Archival 구조와 운영 지표 중심으로 정리한다."
+tags: ["MemGPT", "Letta", "AI Agents", "Memory Architecture", "Stateful Agents"]
+coverImage: /images/default-cover.jpg
+---
+
+I first encountered MemGPT as a research idea, then I watched it slowly become a real production story.
+
+In this post, I want to explain why Letta feels different from most “memory for agents” tools I’ve tested: not just because it has more features, but because it tries to treat memory like an operating system layer.
+
+That sentence is intentionally bold. My working definition now is:
+
+> Letta is the first stack I used where memory is not an add-on; memory is the execution environment.
+
+I’m not saying it is perfect. It is expensive, it is complex, and I still see teams trip on a basic thing: **stateful agents are harder than they sound**.
+
+But I also cannot ignore what it has proven at least once: a production claim of more than **1 million Stateful agents** in Built Rewards.
+
+That is the scale test I care about.
+
+---
+
+## 1) Why people still talk about "token context" when they should talk about memory architecture
+
+Most teams still frame long-context problems as a context window problem.
+
+- "Can we fit all previous messages?"
+- "Can we add a larger model?"
+- "Can we trim prompt text better?"
+
+Those questions are valid, but incomplete.
+
+When I implemented a lot of chatbots, I noticed a pattern:
+
+- If every turn repeats the same preference check, you’re paying for memory retrieval repeatedly.
+- If every user asks “remember this” twice, your system is re-ingesting the same fact via retrieval and summarization logic.
+- If a long conversation goes off-topic, your retrieval layer starts returning noise.
+
+MemGPT’s original insight was simple but profound: **the model should not depend on one monolithic context**. It should have tiers.
+
+That’s where people confuse “long context model” and “stateful agent”.
+
+### Context window solves only capacity
+A larger context window is like renting a bigger bookshelf.
+
+### Tiered memory solves continuity
+Core/Recall/Archival decides what must live near the center of attention and what can wait in cheaper storage.
+
+So, while memory windows are still bounded, continuity becomes policy-driven instead of brute-force.
+
+---
+
+## 2) The Memory-as-OS lens (my RAM/Cache/Disk map)
+
+A lot of people describe Letta as “three memory layers”. I find the **RAM/Cache/Disk analogy** much easier to reason about.
+
+### Core memory = RAM-like register block
+
+Core is the always-present block, loaded every turn.
+
+In practical terms this usually contains:
+
+- `persona` block (system personality, safety boundaries, long-term identity)
+- `human` block (user-level facts that must be immediately trusted)
+- Any custom profile blocks your product needs (team norms, environment constraints, budget, etc.)
+
+In RAM terms, this is small, hot, and fast. If your Core grows unbounded, prompt cost explodes and latency goes up.
+
+### Recall memory = Cache-like retrieval layer
+
+Recall stores prior interactions as conversation records.
+
+When a new query arrives, Recall can query semantic or date-indexed memory and inject relevant slices back into Core. It is exactly like a cache:
+
+- fast enough to reduce unnecessary recomputations
+- small enough to be selective
+- not everything lives here forever
+
+### Archival memory = Disk-like durable store
+
+Archival is for documents, history artifacts, user-specific knowledge, and facts that shouldn’t disappear but also don’t need constant active attention.
+
+For me, this is the equivalent of long-term disks:
+
+- massive
+- slower
+- durable
+- powerful when searched correctly
+
+### Important connection: Memory movement is part of the control loop
+
+In Letta-style systems, recall/archival are not passive stores.
+
+The agent can call tools that:
+
+- insert useful snippets into Core
+- replace drifting statements
+- rethink a block with a rewritten full value
+- search recall and archival and pick a better candidate
+
+That means memory is dynamic, not static.
+
+---
+
+## 3) What changed from MemGPT to Letta
+
+MemGPT as an idea was academically exciting. Letta is the same idea with commercial urgency.
+
+The project is now positioned under **Letta** with public company narrative and a stronger product surface:
+
+- Rebranded from MemGPT lineage
+- Company profile points to UC Berkeley roots, and the founding team being led by
+  **Charles Packer** (CEO) and **Sarah Wooders** (CTO)
+- $10M seed funding claim appears in many ecosystem reports
+- open-source activity with 100+ contributors and active ecosystem
+
+The visible product lineup now looks like this:
+
+- **Letta Code** (CLI, Dec 2025) for local coding agents
+- **Letta API** for production integration
+- **Letta ADE** for environment/tooling workflows
+- **Letta Leaderboard** for memory management benchmarking
+
+From my perspective, the key is this: they moved from “research project with cool ideas” to “tooling + API + deployment pattern”.
+
+That’s why I started tracking Built Rewards as a practical validation case.
+
+---
+
+## 4) Built Rewards: what the 1 million claim actually changes
+
+The strongest signal of architectural maturity is not a demo.
+
+It is not a paper.
+
+It is not a blog post with charts.
+
+It is one company saying:
+
+- We run stateful recommendation agents at massive scale
+- The count is above **1 million**
+
+Built Rewards being cited as this scale example matters for three reasons:
+
+1. **Stateful agent lifecycle stability**
+   
+   Handling hundreds or thousands of chat-like agents is one thing.
+
+   Handling 1M with persistent identity and memory mutation is another order of difficulty.
+
+2. **Personalization in production**
+   
+   Recommendation quality improves not because a model becomes smarter every night, but because each user-facing agent can carry a personal context trail and keep updates over time.
+
+3. **Cost-of-memory tradeoff becomes real**
+   
+   If a team can maintain 1M agents while still controlling operating cost, they likely solved the boring engineering part: retention policy, summarization cadence, and fail-safe loops.
+
+I’m not claiming every deployment metric in public is publicly audited at enterprise-grade rigor. But the fact this deployment is repeatedly referenced in Letta/AI communities makes it a high-value benchmark.
+
+For teams like mine, this matters: you can no longer ignore architectural questions by calling them "future experiments".
+
+---
+
+## 5) Operationally, what I see as Letta’s core primitives
+
+Letta’s loop still feels familiar if you’ve built tool-using agents, but two differences are decisive.
+
+### A. Memory is a controlled schema, not just a text blob
+
+I can model memory as labeled blocks (`persona`, `human`, etc.).
+
+That is crucial because block-level control gives composability:
+
+- separate token budgets per block
+- independent churn rules
+- better diff/revision auditability
+
+### B. Memory editing tools are explicit API surface, not hidden internals
+
+You do not depend on spooky magic reranking.
+
+You get concrete operations:
+
+- `memory_insert`
+- `memory_replace`
+- `memory_rethink`
+- `conversation_search`
+- `archival_memory_search`
+- `archival_memory_insert`
+
+### C. Heartbeat is opt-in with guardrails
+
+By default, `request_heartbeat=false`.
+
+That default changes the behavior profile dramatically.
+
+When you enable iterative steps, you are now owning loop risk:
+
+- max step count
+- budget per tool call
+- de-duplication around edits
+- failure handling
+
+I prefer this design over infinite implicit loops. If your architecture defaults to continuous reasoning, you are one tool glitch away from runaway tokens.
+
+---
+
+## 6) “Sleep Time Compute” and why I got excited
+
+One of the biggest conceptual shifts for me is their “sleep time compute” framing.
+
+Traditionally we optimize only **test-time compute**: the period when user is interacting.
+
+With stateful agents, there is another phase:
+
+- user is idle
+- but memory maintenance, embeddings, context hygiene, background indexing, reconciliation can continue
+
+That may sound abstract, so let me map to concrete benefits:
+
+- You can postpone heavy indexing to idle windows.
+- You can run background consolidation without waiting for user prompt completion.
+- You can update memory asynchronously after receiving raw signals.
+
+I like this because it reframes AI agents as **always-on systems**, not request/response scripts.
+
+The phrase in practice:
+
+> “The user stopped talking, but the agent can still be thinking safely.”
+
+Not the same as hallucinating during downtime, but safely preparing next-turn quality.
+
+---
+
+## 7) Where teams still fail (I ran into this repeatedly)
+
+I learned the hard way that every layer can burn you.
+
+### 7-1) Token cost creep
+
+The first-time joy of self-editing turns into a monthly bill if you
+over-search, over-recall, over-rethink.
+
+I see teams doing this pattern:
+
+- every turn: search conversation
+- every tool return: summarize + insert
+- every summary: rethink full block
+
+That sounds robust, but it stacks tokens.
+
+Rules that help:
+
+- keep Core short and high-signal
+- gate `rethink` as rare, prefer targeted `replace`
+- summarize only when recall confidence drops
+- monitor budget per turn and per step
+
+### 7-2) Memory drift
+
+Self-editing is powerful, but it can drift.
+
+If `persona` keeps rewriting itself without policy checks, you get unintended persona mutation.
+
+I strongly recommend:
+
+- regex/schema validation for critical blocks
+- requiring exact old-text matches for replace where possible
+- periodic “anchor snapshots” of base persona/human values
+- human-in-the-loop for high-sensitivity edits
+
+### 7-3) Loop risk
+
+If heartbeat is enabled without strict limits, you can enter repetitive tool calls.
+
+The default stop behavior is wise, but many product teams flip this because they want persistence.
+
+Set:
+
+- `MAX_STEPS`
+- per-step wall-clock and token ceilings
+- duplicate-call suppression
+- failure auto-stop policy
+
+### 7-4) Retrieval quality is the floor
+
+Bad chunks = bad retrieval = wrong reinjection = wrong edits.
+
+Even if you have vector search, low-quality chunking and missing metadata create weird “confident nonsense” cycles.
+
+Anchor facts in Core when they are critical; keep archival facts traceable with source metadata.
+
+---
+
+## 8) Comparing alternatives (what I would choose in 2026)
+
+When I evaluate projects in 2026, I often think in terms of “operational intent.”
+
+| Goal | Likely better fit |
+|---|---|
+| Fast personalization + minimal maintenance | Mem0 |
+| Conversation memory only | Zep |
+| Knowledge graph-heavy reasoning | Cognee |
+| Full-stateful agent stack with self-editing | Letta |
+| Workflow orchestration with strong graph control | LangGraph |
+
+I’ll frame it as trade-offs:
+
+- **Letta**: strong full-stack memory agent story, but higher complexity and cost profile
+- **Mem0**: cleaner, less invasive API, lower overhead, simpler onboarding
+- **Zep**: stable for chat history with easier implementation scope
+- **Cognee**: graph + vector hybrid is compelling where relationships dominate
+- **LangGraph**: if you need strict flow control and branch/retry semantics first, and memory is secondary
+
+The more I build with Letta, the clearer this became: it is neither cheapest nor simplest.
+
+It is the one to choose if you truly need stateful autonomy.
+
+---
+
+## 9) Practical roadmap for a real stack (if I were building next quarter)
+
+If I had to deploy this in a production environment this quarter, I would do this in phases:
+
+### Phase 1 — Core first (file or table)
+
+- `persona.md`, `human.md` equivalents
+- size budgets (e.g., 1-2KB each)
+- expose controlled `insert/replace/rethink`
+- always inject Core into compiler pipeline
+
+### Phase 2 — Recall on your own logs
+
+- store chat/events in JSONL or messages table
+- add lightweight keyword/date search first
+- delay full semantic indexing until traffic justifies it
+
+### Phase 3 — Archival with embeddings
+
+- add passage store + semantic index
+- store source metadata and timestamps
+- create archival insert/search tools
+
+### Phase 4 — Heartbeat discipline
+
+- default stop after one tool turn
+- explicit opt-in for `request_heartbeat=true`
+- set conservative step caps (2–3)
+
+### Phase 5 — Scale migration
+
+- SQLite/vss for early stages
+- Postgres + pgvector for multi-agent scale
+- add RBAC/audit for multi-tenant
+- monitor p95 latency for compaction and retrieval operations
+
+I keep this in a note because teams skip this and jump directly to “full architecture on day 1,” then burn months on schema drift and prompt sprawl.
+
+---
+
+## 10) A real architecture sketch I keep telling people
+
+If I simplify the loop in one diagram, it looks like:
+
+```text
+User Input
+   |
+   v
+[Context Compiler]
+   |-- Core (always)
+   |-- Recent convo digest
+   |-- Recall search results (on demand)
+   |-- Archival snippets (on demand)
+        |
+        v
+   Agent LLM + Tools
+        |-- memory_insert / memory_replace / memory_rethink
+        |-- conversation_search/date
+        |-- archival_search / archival_insert
+        |
+        v
+   DB + retrieval stores
+   |
+   Heartbeat controller (default stop, opt-in continue)
+```
+
+That’s not new as a concept, but practical Letta workflows make this explicit enough to optimize each stage.
+
+I especially value this: once memory tiers and controller are explicit, you can optimize each with targeted metrics.
+
+- retrieval precision/recall per tier
+- token-per-useful-insight
+- edit frequency by block
+- stale block ratio
+
+Those metrics are what separate a proof of concept from an operation-ready service.
+
+---
+
+## 11) Why I think OpenClaw-style systems can still learn from it
+
+I run memory-heavy workflows where context compaction is already a challenge.
+
+A Letta-like pattern can improve two painful points:
+
+1. **Session continuity**: not everything has to be in one giant prompt.
+2. **Operational replayability**: you can inspect what memory changed, when, and why.
+
+For a personal AI assistant, I’d still start modest:
+
+- SQLite first, not Postgres, for early recall
+- Core block files for persona/human
+- lightweight recall search with time/keyword indexing
+- async maintenance when idle
+
+Only when the flow matures, add vector search and then pgvector.
+
+The mistake many make is overbuilding first and then suffering from over-engineering.
+
+For me, the right sequence is: **stability before sophistication**.
+
+---
+
+## 12) Final verdict: why “1 million” is not the headline
+
+The headline is the number.
+
+The real lesson is the architecture:
+
+- **Always-visible Core** for immediate consistency
+- **on-demand Recall/Archival** for breadth
+- **explicit editing ops** for memory evolution
+- **default-stop loops** for safety
+- **sleep-time compute** for efficient background work
+
+That combination is what moves memory from gimmick to infrastructure.
+
+Can Letta win every memory conversation in 2026? Not necessarily.
+
+Mem0, Zep, and Cognee each win in their own slices.
+
+But if your problem is truly stateful autonomy — where agents must remember, reconcile, mutate, and act over long spans — this architecture is hard to beat right now.
+
+From my seat, this is why I now phrase it this way:
+
+> Letta is no longer “a project that remembers.” It is an operating model for how AI should remember.
+
+And that’s the distinction that convinced me to take it seriously.
+
+---
+
+## Reference Links
+
+- Letta Docs: https://docs.letta.com/
+- Letta GitHub: https://github.com/letta-ai/letta
+- Letta Code GitHub: https://github.com/letta-ai/letta-code
+- Letta Leaderboard: https://leaderboard.letta.com/
+- MemGPT paper (arXiv:2310.08560): https://arxiv.org/abs/2310.08560
+- Letta founder discussion: https://maily.so/seanlee/posts/5xrx65nyr2v
+- Mem0: https://github.com/mem0ai/mem0
+- Cognee: https://github.com/topoteretes/cognee
+- Zep: https://www.getzep.com/
+- LangGraph: https://www.langchain.com/langgraph

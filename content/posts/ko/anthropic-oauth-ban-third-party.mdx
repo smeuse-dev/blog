@@ -1,0 +1,120 @@
+---
+title: "앤트로픽, 사전 경고도 없이 Claude 구독 OAuth 서드파티 사용 전면 차단"
+date: "2026-02-20T12:00:00.000Z"
+description: "1월 9일 새벽, OpenCode·OpenClaw 등 서드파티 도구들이 일제히 멈췄다. 2월 19일에야 공식 문서로 정책이 확인됐다. 무슨 일이 있었고, 개발자들은 왜 분노하는가."
+tags: ["앤트로픽", "Claude", "OAuth", "개발자도구", "OpenClaw", "OpenCode", "AI정책"]
+series: "AI 산업 동향"
+seriesPart: 1
+---
+
+<Figure
+  src="/images/posts/anthropic-oauth/claude-oauth-ban.jpg"
+  alt="앤트로픽이 Claude Code OAuth 토큰의 서드파티 사용을 금지했다"
+  caption="2026년 1월 9일 새벽, OpenCode·OpenClaw를 비롯한 수십 개의 개발자 도구가 동시에 멈췄다"
+  credit="Awesome Agents"
+  creditUrl="https://awesomeagents.ai/news/claude-code-oauth-policy-third-party-crackdown/"
+  priority={true}
+/>
+
+## 무슨 일이 있었나
+
+**2026년 1월 9일**, 개발자들이 눈을 뜨니 워크플로우가 멈춰 있었다.
+
+Claude 구독 OAuth로 인증하던 서드파티 도구들 — OpenCode(GitHub 스타 56,000+), OpenClaw, Clawdbot, Roo Code, Zed 등 수십 개 — 이 일제히 작동을 멈췄다. 에러 메시지는 단호했다:
+
+> *"이 자격 증명은 Claude Code 전용으로 인증되어 있으며, 다른 API 요청에는 사용할 수 없습니다."*
+
+사전 공지 없이, 서버 측 점검이 밤사이 배포됐다. 남용 필터에 걸린 계정은 자동으로 차단됐다. 월 $200짜리 Max 플랜 사용자가 작업 시작 20분 만에 계정이 정지되는 일도 벌어졌다. Anthropic은 이후 일부 오탐 차단을 복구했지만, 개발자 신뢰는 이미 금이 갔다.
+
+그로부터 6주 후인 **2026년 2월 19일**, Anthropic이 공식 Claude Code 법률 및 컴플라이언스 문서를 업데이트해 정책을 공식화했다:
+
+> *"Claude Free, Pro, Max 계정을 통해 얻은 OAuth 토큰을 Agent SDK를 포함한 다른 제품, 도구, 서비스에서 사용하는 것은 허용되지 않으며, 소비자 이용약관 위반에 해당합니다."*
+
+시행이 먼저였다. 설명은 나중에 나왔다.
+
+---
+
+## 서드파티 도구들은 어떻게 OAuth를 활용했나
+
+기술적 메커니즘을 이해하면 왜 작동했고, 왜 Anthropic이 막았는지가 명확해진다.
+
+OpenCode 같은 도구들은 **Claude Code 클라이언트 신원을 스푸핑**했다 — Anthropic 서버가 공식 CLI에서 온 요청으로 인식하도록 HTTP 헤더를 조작했다. 이렇게 하면 구독 OAuth 토큰으로 인증하면서 서드파티 인터페이스를 통해 요청을 라우팅할 수 있었고, Claude 구독 모델의 내장 속도 제한을 사실상 무력화했다.
+
+Claude Code 구독에는 "속도 제한"이 있다. 단일 사용자가 24시간 내내 API 수준의 토큰을 소비하지 못하도록 막는 장치다. 서드파티 도구들은 이 제한을 제거했다. 자율 실행 에이전트가 밤새 루프를 돌면 구독 가격으로는 도저히 지탱할 수 없는 양의 토큰을 소비할 수 있었다.
+
+Anthropic의 대응은 대칭적이었다: 실제 클라이언트 신원을 검증하는 서버 측 점검을 배포하고, 정품 Claude Code 바이너리가 아닌 모든 요청을 거부.
+
+---
+
+## 경제학: 구독 차익 거래
+
+차단의 비즈니스 논리는 명확하다.
+
+| 채널 | 비용 | 제공 내용 |
+|------|------|---------|
+| Claude Max 구독 | $100~200/월 | Claude Code 경유 속도 제한 있는 접근 |
+| API (Opus 4.6) | $5/M 입력 · $25/M 출력 | 토큰당 과금, 한도 없음 |
+| 헤비 유저 기준 동등 API 비용 | **$1,000+/월** | 같은 토큰 사용량 |
+
+서드파티 도구를 통해 Max 구독으로 자율 에이전트 루프를 돌리면 $200 구독료를 내면서 $1,000+ 어치 API 토큰을 소비할 수 있었다. 수천 명의 사용자가 같은 방식으로 쓰면, 그 격차는 Anthropic의 가격 모델 자체를 위협한다.
+
+GitHub 토론에서 한 개발자가 솔직하게 표현했다:
+
+> *"Claude Code 한 달 사용량이 API로 계산하면 $1,000이 넘는 게 충분히 가능합니다."*
+
+Anthropic 입장에서 이건 이용약관 형식 문제가 아니었다. 규모화된 구독 차익 거래였다.
+
+---
+
+## 개발자들이 분노하는 이유
+
+<Figure
+  src="/images/posts/anthropic-oauth/anthropic-claude.jpg"
+  alt="Anthropic Claude 브랜딩"
+  caption="구독 OAuth로 제품을 구축한 개발자들에게 마이그레이션 시간이 주어지지 않았다"
+  credit="Anthropic via WinBuzzer"
+  creditUrl="https://winbuzzer.com/2026/02/19/anthropic-bans-claude-subscription-oauth-in-third-party-apps-xcxwbn/"
+/>
+
+정책 자체는 이해할 수 있다. 실행 방식은 그렇지 않다.
+
+**사전 공지 없음.** 1월 9일 시행이 공지 없이 떨어졌다. 이미 프로덕션에서 고객을 서비스하던 제품을 Claude와 통합한 개발자들에게 마이그레이션 시간이 전혀 없었다.
+
+**자동 계정 차단.** 남용 필터에 걸리면 즉시 차단. Claude Code 사용량을 추적하는 Mac 앱을 만든 개발자도 차단됐다 — 속도 제한을 우회하는 도구가 아니었지만, 필터를 충분히 자극했다.
+
+**소급 시행.** 이용약관 문구는 이전부터 존재했지만, 시행은 새로운 것이었다. 개발자들은 Anthropic이 이 패턴을 묵인하고 있다고 판단했다 — 수개월간 아무것도 막지 않았으니까.
+
+**일관성 없는 소통.** 개발자들이 시행을 지적하자, Anthropic은 처음에 문서 업데이트를 "docs 정리"로 설명하며 Agent SDK와 Max 구독 사용에 대해서는 아무것도 바뀌지 않는다고 했다. 동시에 차단 보고가 계속 들어왔다. 혼선이 몇 주간 이어졌다.
+
+개발자 Dave Swift의 표현:
+
+> *"Anthropic이 100만 토큰 컨텍스트의 Sonnet 4.6을 출시했을 때 정말 기대됐습니다. 그런데 에이전트를 새 모델로 전환하자마자 모든 게 멈췄습니다. 인증 오류, OAuth 토큰 거부, OpenClaw와 OpenCode를 쓰던 전체 워크플로우가 중단됐습니다."*
+
+---
+
+## 지금 개발자가 해야 할 것
+
+Anthropic의 공식 지침은 명확하다: **제품 통합에는 API 키를 사용하라.**
+
+Claude를 사용하는 제품을 만들고 있다면:
+
+1. **구독 OAuth 제거.** 이용약관 위반이며 서버 수준에서 적극 차단된다.
+2. **API 키 인증으로 전환.** Anthropic API 키는 토큰당 과금 방식으로, 구독과 무관하다.
+3. **속도 제한을 직접 구현하라.** 구독의 "속도 제한"은 실제 역할을 하고 있었다. API 키는 한도가 없으므로 사용량이 그대로 비용이 된다 — 애플리케이션에 적절한 스로틀링을 직접 구현해야 한다.
+4. **대규모 사용이라면 Anthropic 비즈니스팀에 연락.** 엔터프라이즈 계약은 소비자 이용약관이 아닌 별도 조건을 제공한다.
+
+영향을 받은 도구 사용자라면: 많은 서드파티 도구들이 이미 API 키 인증 모드를 배포했거나 준비 중이다. 사용 중인 도구의 인증 플로우가 업데이트됐는지 확인하라.
+
+---
+
+## 더 넓은 교훈
+
+플랫폼이 개발자들이 쌓아온 "회색 지대"를 닫은 게 처음도 마지막도 아니다.
+
+AI 회사들이 구독을 정액제로 책정하고 개발자들이 사용량 제어를 우회할 수 있다고 발견하면, 경제 논리가 대응을 강제한다. Anthropic의 구독이 작동한 건 속도 제한이 실제로 기능했기 때문이다. 서드파티 도구들이 제한을 제거하자, 구독 가격은 사실상 보조금 지원 API 접근이 됐다.
+
+AI 모델 위에서 개발하는 개발자들을 위한 교훈: **의존하는 가격 책정 뒤의 경제적 메커니즘을 이해하라.** 정액제 구독은 고객 기반 전반의 사용량 평균에 의존한다. 그 평균화 메커니즘을 우회하는 방식으로 엔지니어링하고 있다면, 회색 지대에 있는 것이다 — 그리고 회색 지대는 언젠가 명확해진다.
+
+---
+
+*출처: [WinBuzzer](https://winbuzzer.com/2026/02/19/anthropic-bans-claude-subscription-oauth-in-third-party-apps-xcxwbn/) · [Awesome Agents](https://awesomeagents.ai/news/claude-code-oauth-policy-third-party-crackdown/) · [Anthropic 공식 문서](https://code.claude.com/docs/en/legal-and-compliance) · [ZDNet Korea](https://zdnet.co.kr/view/?no=20260114161950) · [AI타임스](https://www.aitimes.com/news/articleView.html?idxno=205460)*

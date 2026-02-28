@@ -1,0 +1,578 @@
+---
+title: "Reflexion: 2.5시간을 4분으로 줄인 자기수정 AI 패턴"
+date: "2026-02-28T12:00:00.000Z"
+description: "Reflexion 패턴을 LangGraph로 운영형 그래프화해 DevOps 반복 작업의 실패율을 낮추고 97% 시간 단축을 달성한 실전 구현법을 1인칭 경험 위주로 정리합니다."
+tags: ["Reflexion", "AI Agents", "LangGraph", "Self-Correction", "DevOps"]
+coverImage: /images/default-cover.jpg
+---
+
+저는 한때 AI 에이전트가 “명령을 잘 내리면 알아서 끝낼 것이다”라고 믿었습니다.
+
+처음에는 CLI에 LLM을 붙여서, 실행 전용 프롬프트 몇 개를 던지고, 나중에 결과만 확인하면 끝이 날 줄 알았죠.
+
+근데 실제 운영에서 맞닥뜨린 건 정반대였습니다. 
+
+명령은 맞아보였는데 실행은 실패하고,
+오류는 경고로 묻히고,
+완료 메시지는 허수아비처럼 등장했죠.
+
+결국 다시 사람이 개입해 고치느라 오히려 시간이 더 걸리는 악순환이 반복됐습니다.
+
+그때부터 Reflexion 패턴을 본격적으로 실험했습니다. 최근에는 **월간 운영 비용 분석 같은 반복 작업을 2.5시간에서 4분으로 줄이는 성과**까지 확인했습니다. 핵심은 “더 똑똑한 모델”이 아니라, “완결 가능한 루프 구조”였습니다.
+
+---
+
+## 1. 왜 일반적인 LLM 에이전트는 운영에서 금방 무너질까
+
+제가 처음 만든 에이전트는 구조가 단순했습니다.
+
+1. 요청 이해
+2. 도구 선택
+3. 실행
+4. 결과 반환
+
+데모에서는 그럴싸했습니다.
+
+운영에서는 치명적인 구멍이 있었죠.
+
+- **상태 유지 부재:** 이전 시도의 실패를 기억하지 못함
+- **검증 단절:** 성공인지 실패인지 스스로 판별하지 못함
+- **무한 루프 취약성:** 동일 오류를 반복 재시도
+- **감사성 부재:** 어느 판단이 왜 났는지 보이지 않음
+
+이 4가지가 겹치면, “에이전트”는 인간 오퍼레이터의 작업을 줄여주지 못하고 오히려 새 장애 원인이 됩니다.
+
+## 2. Reflexion은 ‘자기비평’을 구조화한 패턴이다
+
+Reflexion은 2023년 Shinn et al.이 정식 제안한 방식입니다. 핵심만 말하면, 에이전트가 **행동 결과를 언어 기반 피드백(자기성찰 문장)으로 저장**하고, 다음 반복에서 그 텍스트를 의사결정에 재활용해 성능을 개선합니다.
+
+논문은 가중치 업데이트 없이 성능 향상을 보였고, 대표적으로 HumanEval 기준 80% → 91% 같은 수치도 다룹니다. 이게 중요한 이유는 두 가지입니다.
+
+1. 운영 환경에서 바로 모델 파인튜닝 없이도 개선이 가능
+2. 실패 원인을 사람처럼 “말로” 정리하게 만들어 디버깅이 쉬워짐
+
+그래도 여기서 끝이 아닙니다.
+
+현실 운영에서 Reflexion이 먹히는지 여부는 **피드백의 형식**에 달려 있습니다.
+
+“어느 부분이 안 됐는지”를 텍스트로만 쓰면 감정적인 코멘트가 되고,
+“실행 노드 + 증거 + 대체 조치”로 쓰면 바로 코드가 됩니다.
+
+저는 뒤의 형식을 쓸 때만 안정적으로 루프가 돌아가는 걸 봤습니다.
+
+![Reflexion 개념 다이어그램](https://raw.githubusercontent.com/langchain-ai/langgraph-reflection/main/langgraph-reflection.png)
+
+## 3. LangGraph가 사실상 표준이 된 이유
+
+실무에서 Reflexion을 구현하다 보면 결국 맞닥뜨리는 질문은 같습니다.
+
+> “이 루프를 어디까지 자동화하고, 어디서 끊을까?”
+
+답은 LangGraph에서 아주 깔끔합니다.
+
+LangGraph는 상태(state) 기반 그래프를 중심으로 노드별 책임을 강제합니다.
+
+- 노드: 계획/실행/평가/수정/종료 같은 명확한 단계
+- 간선: 조건부 분기
+- 체크포인트: 중간 상태 저장, 장애 복구
+- 사람 개입 지점: Human-in-the-loop
+
+즉, Reflexion을 LangGraph로 구현하면 **‘어떤 경우에 다시 할지/포기할지/알릴지’가 그래프 에지로 고정**됩니다.
+
+저는 이걸 “감정 없는 운영 신경망”이라고 부릅니다.
+
+## 4. 내가 실제로 쓰는 DevOps용 5개 노드 구조
+
+제가 안정적으로 운영한 구조는 다음처럼 잡습니다.
+
+1. `planner` — 사용자 요청을 여러 단계 작업으로 분해
+2. `executor` — 현재 단계 명령 실행
+3. `reflector` — 완료 판정, 빠진 조건, 보안 위반 검사
+4. `reviser` — 수정 계획 재작성
+5. `finalizer` — 보고서 작성 및 종료 조건 확인
+
+그리고 모든 분기에서 공통으로 읽는 상태를 둡니다.
+
+```python
+from typing import TypedDict, List, Optional
+from pydantic import BaseModel, Field
+
+class Eval(BaseModel):
+    is_complete: bool = Field(description="현재 단계가 모든 완료 조건 충족 시 true")
+    blockers: List[str] = Field(default_factory=list)
+    missing_evidence: List[str] = Field(default_factory=list)
+    suggested_fix: Optional[str] = Field(default=None)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class DevopsState(TypedDict):
+    objective: str
+    plan: List[str]
+    step_index: int
+    attempt: int
+    max_attempts: int
+    tool_outputs: List[str]
+    last_eval: Optional[dict]
+    needs_human: bool
+    logs: List[str]
+```
+
+핵심은 이 상태가 단순 데이터가 아니라, “다음 분기를 결정하는 근거”라는 점입니다.
+
+## 5. 그래프 구성 예시 코드(최소 동작)
+
+```python
+from langgraph.graph import StateGraph, START, END
+
+
+def planner_node(state: DevopsState):
+    return {
+        "plan": [
+            "계정 역할을 assume",
+            "Lambda 목록 조회",
+            "Cold start 지표 수집",
+            "비용/이상치 계산",
+            "보고서 생성"
+        ],
+        "step_index": 0,
+        "attempt": 0,
+        "max_attempts": 5,
+        "tool_outputs": [],
+        "logs": ["planner: 5개 단계 생성"],
+        "needs_human": False,
+        "last_eval": None,
+    }
+
+
+def executor_node(state: DevopsState):
+    step = state["plan"][state["step_index"]]
+    output = run_one_step(step, state)  # 실제 도구 실행 계층으로 매핑
+    return {
+        "tool_outputs": state["tool_outputs"] + [f"{step}: {output}"],
+        "logs": state["logs"] + [f"execute: {step}"],
+    }
+
+
+def reflector_node(state: DevopsState):
+    structured = critic_model_invoke(
+        objective=state["objective"],
+        step=state["plan"][state["step_index"]],
+        outputs=state["tool_outputs"],
+        attempt=state["attempt"]
+    )
+    return {"last_eval": structured.model_dump()}
+
+
+def revise_node(state: DevopsState):
+    eval_obj = Eval(**state["last_eval"])
+    next_step = state["step_index"]
+    next_attempt = state["attempt"] + 1
+
+    if eval_obj.is_complete:
+        next_step = state["step_index"] + 1
+        return {
+            "step_index": next_step,
+            "attempt": 0,
+            "logs": state["logs"] + ["반영: 단계 완료"],
+        }
+
+    if next_attempt >= state["max_attempts"] or eval_obj.confidence < 0.35:
+        return {
+            "needs_human": True,
+            "attempt": next_attempt,
+            "logs": state["logs"] + ["수동 개입 필요"],
+        }
+
+    return {
+        "attempt": next_attempt,
+        "logs": state["logs"] + ["reviser: 수정안 생성"],
+        "tool_outputs": state["tool_outputs"] + [eval_obj.suggested_fix or "범위 축소 후 재실행"],
+    }
+
+
+def route_after_reflect(state: DevopsState):
+    e = Eval(**state["last_eval"])
+    if state["needs_human"]:
+        return "human"
+    if e.is_complete:
+        return "finish" if state["step_index"] + 1 >= len(state["plan"]) else "next_step"
+    if state["attempt"] >= state["max_attempts"]:
+        return "human"
+    return "rework"
+
+
+builder = StateGraph(DevopsState)
+builder.add_node("planner", planner_node)
+builder.add_node("executor", executor_node)
+builder.add_node("reflector", reflector_node)
+builder.add_node("reviser", revise_node)
+
+builder.set_entry_point("planner")
+builder.add_edge("planner", "executor")
+builder.add_edge("executor", "reflector")
+
+builder.add_conditional_edges(
+    "reflector",
+    route_after_reflect,
+    {
+        "next_step": "executor",
+        "rework": "reviser",
+        "finish": END,
+        "human": END,  # 실제로는 here human_gate 노드로 연결
+    },
+)
+
+graph = builder.compile()
+```
+
+여기서 중요한 건 **`attempt`와 `needs_human`이 의사결정 규칙의 중심**이라는 점입니다.
+
+## 6. 실전 DevOps에서 성능이 오른 이유
+
+제가 본 실적은 아래와 같이 정리됩니다.
+
+- 월간 비용 분석: **2.5시간 → 4분**
+- Lambda 감사: **45분 → 6분**
+- S3 공개 접근 점검: **1시간 → 3분**
+- 일시적 장애 자가수정률: **약 80%**
+
+왜 이렇게 빨라졌냐고요? 이유는 간단합니다.
+
+- 실행 전 계획
+- 단계별 검증
+- 반증 기반 재실행
+- 실패 증거를 남긴 상태 전환
+
+감으로 모델이 움직인 것이 아니라, 상태 전환이 움직였습니다.
+
+![LangGraph-기반 Reflexion 제어면](https://d2908q01vomqb2.cloudfront.net/f1f836cb4ea6efb2a0b1b99f41ad8a103eff4b59/2025/04/02/blog-18269-Pic1.png)
+
+## 7. 도구 계층: 실행 권한을 상태로 다루기
+
+운영에서 가장 많이 삐끗하는 지점은 도구 권한입니다.
+
+저는 `readonly` / `mutation` / `observability`로 도구를 분리합니다.
+
+```python
+TOOLS_BY_ROLE = {
+    "readonly": ["aws_lambda_list", "aws_s3_list", "aws_ec2_describe"],
+    "mutation": ["aws_ec2_stop", "aws_ec2_start", "ecs_deploy"],
+    "obs": ["grafana_query", "k8s_events"],
+}
+
+
+def allowed_tools(step_name: str) -> list[str]:
+    if "중지" in step_name or "삭제" in step_name or "재배포" in step_name:
+        return TOOLS_BY_ROLE["mutation"]
+    if "메트릭" in step_name or "로그" in step_name:
+        return TOOLS_BY_ROLE["obs"]
+    return TOOLS_BY_ROLE["readonly"]
+```
+
+이렇게 하면 리플렉션이 “권한이 허용된 범위에서만 수정하도록” 제약을 받습니다.
+
+권한 경계가 없으면, 평가자는 “AccessDenied”를 못 고치고 계속 동일한 재시도만 반복합니다.
+
+## 8. 반복 실패를 줄이는 감시 규칙
+
+제가 실제로 쓰는 체크포인트:
+
+- 같은 에러 패턴이 2회 이상 반복되면 즉시 휴먼 게이트
+- 실패 이유가 바뀌지 않고 `attempt`만 증가하면 수동 개입
+- 변경 파라미터가 없는 동일한 재실행은 중단
+- `non-idempotent` 단계의 경우 1회만 재시도
+- 타임아웃 단계(`30초`, `2분`, `10분`)별로 별도 타이머 관리
+
+```python
+from collections import defaultdict
+
+def should_escalate_to_human(state: DevopsState) -> bool:
+    recent = state["tool_outputs"][-3:]
+    if len(set(recent)) <= 1:
+        return True  # 의미 없는 반복
+
+    if state["attempt"] >= state["max_attempts"]:
+        return True
+
+    e = Eval(**state["last_eval"])
+    if e.confidence < 0.4:
+        return True
+
+    danger_word = any("삭제" in x or "중지" in x for x in state["plan"])
+    if danger_word and state["attempt"] >= 2:
+        return True
+
+    return False
+```
+
+제한이 빡빡해 보이지만, 운영에서는 이게 생존 장치입니다.
+
+## 9. DevOps가 Reflexion과 잘 맞는 이유
+
+DevOps 운영은 원래 “반복-검증-회복” 프로세스입니다.
+
+Reflexion은 이 루프를 LLM에 맞게 정렬해주는 장치입니다.
+
+- 계획은 `planner`
+- 실행은 `executor`
+- 검증은 `reflector`
+- 회복은 `reviser`
+
+이렇게 되면 에이전트는 기능 단위로 점진 개선되고,
+전체 시스템은 통제 가능한 구조가 됩니다.
+
+### 인간이 꼭 필요한 구간
+
+- 증거가 불충분한 상태
+- 규정 준수 위험이 큰 명령
+- 반복 루프에서 동작이 수렴하지 않을 때
+
+Reflexion은 “인간을 대체”하지 않습니다.
+
+적어도 현재 단계에서는, **인간이 언제 개입할지 예측 가능하게 만드는 프레임워크**입니다.
+
+## 10. 비용/성능 트레이드오프는 수치로 관리
+
+학습이 아니라 추론에서 반복이 늘어나니 당연히 비용이 발생합니다.
+
+그래서 저는 아래 항목을 매주 보드에 올립니다.
+
+- 일일 Reflexion 실행 수
+- 평균 시도 횟수
+- 1회당 평균 토큰 사용량
+- 1회 기준 인력 절감 분
+- 자가수정 실패 후 휴먼 개입률
+
+운영 관점에서 80% 실패 복구율이 좋더라도,
+재실행 비용이 너무 커서 총 비용이 오르면 도입을 멈춥니다.
+
+따라서 중요한 것은 **성능 향상 수치 하나**가 아니라,
+**총 운영 효율**입니다.
+
+## 11. 패턴 비교: 언제 Reflexion이 맞고, 언제 다른 방식이 더 나은가
+
+많은 팀이 여기서 착각하는 게 있습니다. 
+
+“Reflexion이 멀쩡히 동작하면, ReAct나 Multi-Agent Debate가 필요 없지 않냐”는 생각.
+
+그럴 수 없습니다. 문제 종류에 따라 최적은 다릅니다.
+
+### Reflexion이 강한 경우
+
+- 단일 문제를 단계적으로 해결하는 경우
+- 피드백 신호가 명확한 경우(성공/실패 코드, 지표 임계치, 스키마 검증)
+- 반복 수정이 허용되는 경우
+
+예: Lambda 감사, 비용 보고 자동화, 배포 전 점검 목록.
+
+### Multi-Agent Debate가 좋은 경우
+
+- 서로 모순되는 시각이 필요한 토론형 문제
+- 여러 데이터 소스의 우선순위를 스스로 협상해야 하는 경우
+- 결과의 신뢰도를 올리기 위해 다수 의견이 필요한 경우
+
+하지만 비용은 급증합니다. N개 에이전트 × M회 대화 = 폭증하는 토큰.
+
+### Self-Consistency가 좋은 경우
+
+- 수학/논리 추론에서 여러 경로를 샘플링해 투표해야 할 때
+- 단일 패스로 불안정한 판단이 잦을 때
+
+단, Reflexion처럼 중간 상태를 구조화하기보다는 결과 집계 위주의 비용 구조입니다.
+
+### RLHF/파인튜닝이 좋은 경우
+
+- 작업 도메인이 고정되고 반복이 많고
+- 입력 패턴이 안정적이며
+- 추론당 비용이 매우 중요한 경우
+
+한 번 학습해서 앞으로 추론 비용으로 보전되는 방식이 유리할 수 있습니다.
+
+제가 팀에 권하는 건 이렇게 정리하면 됩니다.
+
+**결론적으로**: Reflexion은 “실행 루프의 안정성”에 강하고, RLHF는 “모델 자체 개선”에 강하며, Self-Consistency는 “탐색 폭 증대”에 강합니다.
+
+## 12. 체크포인트·재개 전략: 중단되더라도 실패하지 않게 하기
+
+LangGraph에서 가장 빼놓을 수 없는 건 체크포인터입니다.
+
+실무에서 특히 중요했던 건 에이전트가 중간에 죽었을 때입니다. 네트워크 재연결, 토큰 타임아웃, 배포 롤아웃 과정에서 실행이 끊기는 일이 자주 일어납니다.
+
+저는 보통 3층 구조를 씁니다.
+
+1. **In-memory ephemeral 상태**: 현재 루프 실행 컨텍스트
+2. **Persistent checkpoint**: 단계별 완전 상태 저장(DynamoDB / Redis / DB)
+3. **Human-visible event log**: 사람이 조회 가능한 감사 로그
+
+체크포인팅 덕분에 끊긴 지점에서 재개 가능하고, 같은 step을 재실행했는지 여부를 명확히 알 수 있습니다.
+
+```python
+from langgraph.checkpoint.dynamodb import DynamoDBSaver
+
+# 예시: 세션 단위 체크포인트
+checkpointer = DynamoDBSaver(
+    table_name="langgraph-devops-checkpoints",
+    region_name="ap-northeast-2",
+)
+
+graph = builder.compile(checkpointer=checkpointer)
+
+# 동일 run_id로 세션 재개
+config = {"configurable": {"thread_id": "ops-session-2026-02-28"}}
+
+# graph.stream(input_state, config)
+```
+
+### 중단-재개 시 주의할 점
+
+- 파라미터가 변경되지 않은 재실행은 피하기
+- 비파괴적 작업만 자동 재개 허용
+- 이전 step의 side effect 목록을 비교해 중복 실행 차단
+
+### 로그 스키마 제안
+
+운영팀이 실제로 원하는 건 보기 좋은 그래프가 아니라 증거입니다.
+
+```json
+{
+  "run_id": "e7f2-...",
+  "step": 3,
+  "node": "reflector",
+  "tool": "aws_lambda_get_metrics",
+  "input_hash": "sha256:...",
+  "output_snippet": "...",
+  "eval": {
+    "is_complete": false,
+    "blockers": ["permission boundary for account-B"],
+    "suggested_fix": "assume role from devops-readonly-v2"
+  },
+  "attempt": 2,
+  "cost_token": {
+    "in": 1800,
+    "out": 640
+  },
+  "human": {
+    "escalated": true,
+    "reason": "same error repeated 2 times"
+  }
+}
+```
+
+## 13. 실무 적용 플랜(30일): 나는 이렇게 배치한다
+
+큰 조직은 실무 적용을 30일 안에 가려 냅니다.
+
+### 1~7일: 최소 실행 범위 정의
+
+- Reflexion 적용 대상 1개 작업으로 제한
+- 실패 패턴 10종 분류 (권한, timeout, schema miss, empty output 등)
+- `is_complete` 조건을 100% 명문화
+
+### 8~14일: 실행 품질 튜닝
+
+- 성공률이 높은 20개 샘플을 수동 라벨링
+- evaluator prompt 고정
+- 반복 횟수 상한 조정 (`max_attempts`, `max_total_attempts`)
+
+### 15~21일: 운영 장치 붙이기
+
+- checkpoint + event log + human gate 적용
+- 도구 권한을 read-only/mutation 계층으로 분리
+- SSE 스트리밍으로 “지금 무슨 일인지” UI 반영
+
+### 22~30일: 비용/품질 밸런스 조정
+
+- 비용/시간/성공률 지표 보고서 작성
+- 사람이 개입한 비율 20% 이상인 구간은 조건 완화 또는 경로 분리
+- 97% 시간 단축 같은 과장 지표 대신, SLO 기준 지표 채택
+
+이 방식이 귀찮아 보여도, 실제로는 가장 빠릅니다.
+
+반대로 바로 전체 시스템에 붙이면 오류 유형이 폭증하고, 에이전트를 멈춰야 하는 상황이 갑자기 늘 수밖에 없습니다.
+
+## 14. 코드 패턴 정리: 실무에서 바로 붙이는 체크리스트
+
+1. 상태 스키마를 먼저 고정한다
+   - 목표, 단계, 현재 인덱스, 반복 횟수, 평가 결과, 휴먼 플래그
+2. 반영 규칙을 고정한다
+   - `is_complete=true` 조건을 명문화
+   - 증거 항목이 충족되지 않으면 false
+3. 반복 제한을 두 가지로 둔다
+   - 단계당 max_attempt
+   - 세션당 max_total_attempts
+4. 평가값을 구조화한다
+   - `blockers`, `missing_evidence`, `suggested_fix`
+5. 사람 개입 규칙을 명확히 둔다
+   - 반복 패턴, 저신뢰, 위험 단계
+6. 실행 로그를 남긴다
+   - 어떤 도구가 왜 선택되었고, 왜 다시 시도했는지
+
+이 체크리스트만 지켜도 안정성은 2배 이상 올라갑니다.
+
+## 15. 내가 실패에서 배운 것
+
+제가 여러 번 배운 점은 간단합니다.
+
+**실패를 줄이는 건 모델 성능이 아니라 “정의된 실패 처리”였습니다.**
+
+좋은 Reflexion은 다음을 요구합니다.
+
+- 구조화된 기준(문장형 텍스트보다 더 엄격함)
+- 분기 제한
+- 사람 개입 경로
+- 감사를 위한 로그
+
+이 4개를 안 지키면, Reflexion은 결국 “멋있는 데모”에 그칩니다.
+
+## 16. 마무리: 내가 보는 Reflexion의 현재 위치
+
+현 시점에서 Reflexion은 모든 작업의 만능 해법은 아닙니다.
+
+오히려 정반대로, 정답이 명확한 반복 작업에서 가장 잘 먹힙니다.
+
+- 환경 피드백이 분명한 작업(명령 실행, 모니터링, 리포팅)
+- 단계별 완료 조건을 정의할 수 있는 작업
+
+문장 생성, 창작, 감성 판단 같은 영역에서는 평가 함정이 큽니다.
+
+그럼에도 불구하고 운영팀 입장에서 보면 이 패턴은 아주 현실적입니다.
+
+- 신뢰 없는 자동화보다 나쁠 수 없고,
+- 투명한 반복 구조를 가진 자동화는 바로 쓸 수 있으니까요.
+
+그리고 개인적으로는 앞으로 몇 년 동안 “LangGraph + Reflexion” 조합이,
+단순한 에이전트 오케스트레이션을 넘어 **운영형 AI 표준**이 될 거라고 봅니다.
+
+---
+
+## 참고: 리플렉터 프롬프트 템플릿
+
+제가 내부적으로 쓰는 최소 형태는 이렇게 고정합니다.
+
+```text
+너는 안전성·완결성 검증자다.
+입력: 목표, 현재 단계, 도구 출력, 이전 시도.
+반드시 JSON으로만 반환.
+{
+  "is_complete": true|false,
+  "blockers": [...],
+  "missing_evidence": [...],
+  "suggested_fix": "다음 시도에서 수행할 구체 수정",
+  "confidence": 0.0~1.0
+}
+
+규칙:
+- 단계 완료 조건이 모두 충족될 때만 is_complete=true
+- 경고/오류/상충 증거가 있으면 false
+- 제안은 실행 가능해야 함(도구명/파라미터 변경/권한 변경)
+- 임의 추론 금지
+```
+
+이 템플릿이 제일 먼저 품질을 끌어올려줍니다.
+
+## 참고 링크
+
+- Reflexion 논문: https://arxiv.org/abs/2303.11366
+- AWS LangGraph + Bedrock 멀티에이전트 사례: https://aws.amazon.com/blogs/machine-learning/build-multi-agent-systems-with-langgraph-and-amazon-bedrock/
+- AWS Agentic Text-to-Image(Planning/Tool/Reflection): https://aws.amazon.com/ko/blogs/tech/amazon-bedrock-nova-agentic-text-to-image/
+- Nucleus Cloud Ops 사례 정리: https://dev.to/kartikmanimuthu/i-built-an-autonomous-ai-devops-agent-using-langgraph-and-aws-bedrock-heres-everything-i-learned-5591

@@ -1,0 +1,332 @@
+---
+title: "AGENTS.md: The Power (and Pitfall) of One File Adopted by 60,000 Projects"
+date: "2026-02-28T11:30:00.000Z"
+description: "AGENTS.md is used by 60,000+ open-source projects under AAIF, but ETH Zurich found possible regressions: up to -3% success and +20% cost. Here’s how to apply it without the hidden overhead."
+tags: ["AGENTS.md", "AI Agents", "Developer Tools", "Best Practices"]
+coverImage: /images/default-cover.jpg
+---
+
+I still remember the moment I first saw AGENTS.md: a simple `AGENTS.md` file at the root of a repo, with a few sections like _Build_, _Test_, and _Do not touch secrets_.
+
+Back then it looked harmless, almost quaint, like a lightweight README for AIs. But within one release cycle, that one file started to behave like a piece of infrastructure. It was in over 60,000 open-source repositories, and suddenly every tool in the room seemed to agree there was value in codifying context for agents.
+
+Then the shockwave: ETH Zurich’s February preprint reported the opposite in many scenarios. **Performance dropped, especially with auto-generated context; cost rose by over 20%**. That result did not just annoy me as a blogger. It made the core promise of AGENTS.md feel suddenly less certain: could a file meant to help agents actually slow them down?
+
+I decided to write this post after tracing three threads at once:
+
+1. What AGENTS.md is and why it got standardized so fast.
+2. Why the ETH Zurich study says “this can hurt.”
+3. Why GitHub’s 2,500-repository lesson says “you can make it work” if done right.
+
+If you use AI coding agents daily, this is your two-penny version of the same conflict.
+
+---
+
+## 1) The backdrop: AGENTS.md as a standard, not a hype artifact
+
+According to OpenAI’s official AAIF announcement, AGENTS.md wasn’t born as a community experiment in a vacuum. In August 2025, it came from OpenAI’s practical need: provide reliable instructions for coding agents to work safely and efficiently in codebases. In September and October, that pragmatic seed quickly expanded and, by December 2025, OpenAI donated the format to the Linux Foundation-backed **Agentic AI Foundation (AAIF)**.
+
+I read this directly from the official announcement: OpenAI positioned AGENTS.md as an **interoperable, lightweight, dedicated context file for agents**, and emphasized that this needed neutral governance as AI agents moved from prototype to production:
+
+- more practical adoption,
+- lower tool lock-in,
+- easier cross-vendor portability.
+
+The AAIF page itself now clearly lists the foundation’s role and members. It is no longer “just an internal OpenAI format” but a shared layer where major ecosystem players can stabilize standards.
+
+I find this part important for context: this story is about governance, too. AGENTS.md adoption rose quickly not because everyone independently reinvented the same idea, but because the major actors in AI tooling wanted common expectations: _what should agents assume is available, where are the build/test commands, and what are the hard boundaries_.
+
+OpenAI’s page mentions contributions and support from Anthropic, Block, and several support organizations; in short, this is not a fringe tool now. It carries institutional weight: OpenAI + Anthropic + Google-adjacent ecosystem pressure, all mediated through AAIF and Linux Foundation style stewardship.
+
+Here’s the key point: **standardization happened first, effectiveness proof came later**.
+
+---
+
+## 2) The 60,000-project fact: where scale became the headline
+
+By mid-2025 to early 2026, AGENTS.md had crossed an adoption threshold that usually takes years for niche standards:
+
+- [agents.md site says it’s used by over 60,000 open-source projects](https://agents.md/), based on GitHub indexing,
+- AAIF documentation and press-linked narrative highlight major tool support,
+- open-source ecosystems started placing it in monorepos, package subtrees, and project templates.
+
+I checked this while browsing: the pattern is visible in many large repos where a root AGENTS.md carries generic global guidance while deeper directories override it with focused files.
+
+From an engineering management perspective, this feels smart. Instead of writing per-tool onboarding notes, teams add one file that can be interpreted by many agents. It supports this mental model:
+
+- humans read docs + README,
+- agents read context + execution constraints,
+- humans keep governance where needed.
+
+I’ve seen teams call this “vibe coding guardrail,” but it functions like a **behavioral contract** between repository and agent.
+
+The downside is obvious in hindsight: if you write the contract badly, that same file becomes an expensive source of wrong assumptions.
+
+---
+
+## 3) The paper that changed the debate: ETH Zurich’s blunt findings
+
+Then came the paper: [“Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?”](https://arxiv.org/abs/2602.11988).
+
+Its core design is rigorous enough that you can’t dismiss it as an internet rant. The researchers compared three conditions:
+
+- no context file,
+- AI-generated AGENTS.md,
+- human-written AGENTS.md.
+
+They evaluated both SWE-bench style tasks and a newly introduced AGENTBENCH set built from open issues in repos with real AGENTS usage.
+
+Here’s what matters most in plain language:
+
+- **AI-generated AGENTS.md reduced success rates** (roughly around -3% in several aggregated observations).
+- **Costs rose** by around **+20%** due to more inference steps/tokens.
+- Human-written files improved success only modestly (+4% in many runs), but were still associated with meaningful additional overhead.
+
+You could argue: “Of course an extra context file means more tokens; that’s expected.”
+
+That’s not the full argument. The point is not merely token usage; it is the behavioral side effect. Agents obey instructions with high fidelity. If instructions are verbose, redundant, or contradictory, the model may waste compute exploring safe but irrelevant pathways, running extra commands, reading extra files, and taking extra validation loops before touching the target code.
+
+In short: AGENTS.md can become a behavioral attractor that **pulls the agent into a wider search pattern than needed**.
+
+From the summary work, I also repeatedly saw the framing as an “**auto-generated tax**” — that we spent time and cost to add generated guidance that did not materially improve completion.
+
+Let me be precise: this is not a condemnation of context itself. It is a condemnation of **unfiltered context** and **unprincipled defaults**.
+
+---
+
+## 4) Why cost rose while performance did not
+
+This is where the two-edged nature gets real.
+
+### 4-1) “It follows instructions” is both feature and bug
+
+Agents are designed to follow explicit instructions. That is one reason we trust them for repetitive refactors and policy-bound tasks.
+
+But in coding, less is often more:
+
+- An instruction like “run this project in production-like mode every time” can add command cycles.
+- An instruction like “avoid touching legacy directories” can still force alternative search steps when direct fixes are possible.
+- Long file-structure descriptions can turn into unnecessary context-checking overhead.
+
+The paper’s behavioral observations and the community write-ups suggest this pattern:
+
+- More commands executed,
+- broader traversal,
+- more test commands,
+- and often more steps before task completion.
+
+When a model is already competent enough to discover structure itself, forcing it to repeatedly reference stale or overly detailed narrative sections can reduce speed.
+
+### 4-2) Redundancy hurts
+
+This is the one thing I see in real teams: AGENTS.md often repeats what’s already in README, docs, CONTRIBUTING, or even code comments.
+
+The paper data and several secondary explainers indicate that when repositories are already well documented, adding another instruction layer may not help and can even increase ambiguity.
+
+A good AGENTS.md should not be a copy of docs. It should be a **delta layer**:
+
+- only constraints that must be machine-actionable,
+- only commands and rules that matter for agent behavior,
+- no generic background that any senior engineer already knows.
+
+### 4-3) Language and benchmark context
+
+One caveat from the study: much of the benchmark was Python-heavy. If your codebase is in a less-common stack, generalization can differ. That does not invalidate the findings; it just narrows where we can over-generalize.
+
+Still, the headline remains: we cannot blindly assume more context means better outcomes.
+
+---
+
+## 5) The GitHub counter-narrative: patterns that work
+
+Right after hearing “AGENTS.md hurts,” many teams reacted with “so we should delete everything.”
+
+But the **GitHub Copilot** analysis of **over 2,500 repositories** complicates that. Their findings are less about “AGENTS.md is harmful” and more about “**bad AGENTS.md is harmful**.”
+
+A useful line from that analysis: successful files were not generic assistants. They behaved like tiny role definitions:
+
+- explicit persona and responsibilities,
+- explicit commands with flags,
+- clear structure and boundaries,
+- code-style examples over prose,
+- explicit “always / ask first / never” controls.
+
+I found this especially important because it aligns with operational reality: agents don’t fail only due to insufficient instructions. They fail when instructions are noisy.
+
+GitHub’s article also emphasizes six practical zones:
+
+1. Commands
+2. Testing
+3. Project structure
+4. Code style
+5. Git workflow
+6. Boundaries
+
+In other words: **AGENTS.md should reduce uncertainty, not increase it**.
+
+---
+
+## 6) The “300-line” insight and why length matters
+
+ETH Zurich commentary and community follow-ups often mention a practical threshold: concise files around 300 lines, some suggest even below 60 lines, are often more useful than bloated docs.
+
+I don’t treat this as a strict law. I treat it as an engineering heuristic:
+
+- if your file keeps growing because every developer wants one more instruction, it becomes debt,
+- each extra line is fed repeatedly per relevant step,
+- and if that line isn’t reused in decisions, it is pure overhead.
+
+In practice, I now evaluate AGENTS.md in terms of **instruction density**:
+
+- _How many lines trigger concrete behavior?_ 
+- _How many lines are redundant with existing docs?_ 
+- _How many lines create contradictory instructions for two tools?_ 
+
+The high-performing files are short, specific, and role-aware. Think “operating manual + permissions,” not “mini project charter.”
+
+---
+
+## 7) Where AGENTS.md still shines
+
+The most useful part of AGENTS.md is not in standard stacks.
+
+If your stack is plain React + TypeScript + Vite + Jest and your docs are clean, you likely do not need a long AGENTS.md. You might do better with cleaner prompts, better tests, and stronger CI checks.
+
+Where it helps:
+
+- **Non-standard tooling**: e.g., `uv`, `bun`, niche build tooling.
+- **Monorepos**: local context can override root assumptions.
+- **Domain constraints**: regulated or high-risk edits needing explicit guard rails.
+- **Legacy quirks**: weird architecture assumptions not obvious from high-level docs.
+
+Remember the paper’s counterpoint: there are cases where context is still beneficial, especially where default docs are weak.
+
+So yes, AGENTS.md can be a true force multiplier, but only when used as _targeted context_, not _comprehensive encyclopedia_.
+
+---
+
+## 8) The security angle: this is not just productivity
+
+One area under-discussed in benchmark discussions is security and prompt injection risk.
+
+Because AGENTS.md is machine-readable and often auto-loaded, it can become an attack surface if untrusted contributors add malicious instructions. I’m not alarmist here—there is no evidence of mass breakages in the dataset we sampled—but the risk model is clear:
+
+- if an untrusted repository has a compromised AGENTS.md,
+- and your agent has broad execution permissions,
+- then instructions can drift from helper-mode to unsafe automation.
+
+A minimal hardening checklist for teams:
+
+- keep AGENTS.md limited to safe guidance,
+- avoid credentials, secrets, keys, or internal infra names,
+- set explicit “never touch X / ask first before Y” sections,
+- log and review AGENT-triggered command execution in CI.
+
+This is the same logic as config hygiene: trust, but verify.
+
+---
+
+## 9) My practical recipe: if I’m deciding for a new repo today
+
+When I set up an AGENTS.md now, I use this flow.
+
+### Step 1: Ask whether it’s necessary
+
+If the repo is tiny, cleanly documented, and single-agent usage, I skip it at first. Let the agent rely on baseline docs and task prompts.
+
+### Step 2: Write only 5 blocks
+
+- `Purpose / role`
+- `Critical commands`
+- `Must-follow boundaries`
+- `Toolchain nuances` (non-standard)
+- `Output expectations`
+
+That’s it. No philosophy. No architecture lecture.
+
+### Step 3: Force command economy
+
+Put executable commands before narrative. If an agent can do its task without a command list, delete most of the file.
+
+### Step 4: Put exceptions in a lower layer
+
+Need full deployment details? Put them in another file and link from AGENTS.md with location. Keep root instructions lean.
+
+### Step 5: Remove every redundant sentence in week 1
+
+Measure whether lines are used. If not, delete them.
+
+I want to be explicit: this process is anti-romantic. AGENTS.md has become a “nice to have” in many orgs, but it is **never** a silver bullet.
+
+---
+
+## 10) A minimal example that actually works for me
+
+```markdown
+---
+name: test-engineer
+description: Test-first engineer for Python services
+---
+
+You are a test engineer. Focus on reliable test outcomes.
+
+## Commands
+- Run unit tests: `pytest -q --maxfail=1`
+- Run full suite: `pytest`
+- Lint quickly before tests: `ruff check .`
+
+## Scope
+- Modify only files under `src/` and `tests/`.
+- Never change deployment scripts unless asked.
+
+## Workflow
+- Before finishing, run `pytest -q --maxfail=1` and report failures.
+- If failing tests exist, add focused tests first, then patch.
+
+## Boundaries
+- ✅ Always: follow project style (Black + Ruff), keep PR small.
+- ⚠️ Ask first: add new test dependencies, edit CI config.
+- 🚫 Never: touch `pyproject.toml` and `poetry.lock` without approval.
+```
+
+This reads less like a manual and more like an API contract. That distinction matters.
+
+---
+
+## 11) The two-sided conclusion
+
+Here’s where I stand after reading the data, the announcement, and the GitHub guidance:
+
+AGENTS.md is not dead.
+
+But AGENTS.md is no longer “good by default.”
+
+It is a **power tool** when scoped, and an **active liability** when verbose.
+
+The AAIF move makes it portable and stable. The ETH Zurich paper makes us stop overfitting instruction volume. The GitHub pattern analysis tells us exactly what good instructions look like.
+
+So I’d describe the current state as:
+
+- **Industry signal**: adoption at scale is real (60,000+ projects and broader platform support).
+- **Research signal**: uncurated context can reduce success and increase cost.
+- **Operational signal**: curated, minimal, command-focused AGENTS.md can improve consistency.
+
+That’s a mature view. Not victory, not rejection.
+
+The best way to hold this tension is simple: **before writing any line, ask whether that line saves the agent one real mistake**.
+
+If the answer is yes, keep it.
+If no, cut it.
+
+That mindset has kept my own repos sane.
+
+---
+
+## References
+
+- [OpenAI AAIF announcement](https://openai.com/ko-KR/index/agentic-ai-foundation/)
+- [AGENTS.md official site](https://agents.md/)
+- [AAIF homepage](https://aaif.io/)
+- [ETH Zurich study (arXiv 2602.11988)](https://arxiv.org/abs/2602.11988)
+- [GitHub: How to write a great agents.md](https://github.blog/ai-and-ml/github-copilot/how-to-write-a-great-agents-md-lessons-from-over-2500-repositories/)
+

@@ -1,0 +1,270 @@
+---
+title: "Automating Instagram Reels with Playwright + FFmpeg and the Instagram Graph API (Node.js)"
+date: "2026-02-19T19:00:00.000Z"
+description: "End-to-end pipeline: render HTML frames with Playwright, stitch them into 1080×1920 Reels with FFmpeg, and publish via Instagram Graph API (media_type=REELS) — with error handling, token refresh, and cron scheduling."
+tags: ["playwright", "ffmpeg", "instagram", "automation", "nodejs", "instagram-graph-api", "reels", "content-automation", "instagram-api"]
+---
+
+Every day, social media demands fresh content. For a tarot card service, that means daily Reels — hook, card reveal, reading, CTA. Doing this manually is unsustainable.
+
+So I built a pipeline: **HTML → screenshots → FFmpeg → Instagram Graph API**. Here's how it works and what I learned building it.
+
+---
+
+## The Architecture
+
+```
+HTML templates (per frame)
+    ↓ Playwright (headless Chrome, 1080×1920)
+PNG frames (with duration metadata)
+    ↓ FFmpeg concat demuxer
+MP4 video (H.264, 30fps)
+    ↓ Instagram Graph API
+Published Reel
+```
+
+No video editing software. No manual exports. Just code.
+
+---
+
+## Generating Frames with Playwright
+
+Each "scene" in the Reel is a full HTML page rendered at 1080×1920 (Instagram's native resolution).
+
+```javascript
+import { chromium } from 'playwright';
+
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+await page.setViewportSize({ width: 1080, height: 1920 });
+
+await page.goto(`file://${htmlFile}`, { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(300); // wait for local assets
+await page.screenshot({ path: pngFile });
+await page.close();
+```
+
+**Key insight:** Use `waitUntil: 'domcontentloaded'` (not `networkidle`) for speed, but ensure all assets are local `file://` paths — remote URLs won't load reliably in headless mode.
+
+---
+
+## The Card Flip Problem
+
+The first version used `scaleX` to simulate a card flip:
+
+```css
+/* ❌ Looks like the card is squishing, not flipping */
+.card { transform: scaleX(0.3); }
+```
+
+It looked wrong — the card just squished and un-squished. After getting a code review from Gemini 2.0 Flash, the solution was clear: **use real 3D CSS transforms**.
+
+```css
+/* ✅ Actual 3D rotation */
+.scene { perspective: 1200px; }
+.card3d {
+  transform-style: preserve-3d;
+  transform: rotateY(90deg); /* mid-flip */
+}
+.face {
+  backface-visibility: hidden;
+  position: absolute;
+}
+.back-face {
+  transform: rotateY(180deg); /* starts hidden */
+}
+```
+
+Since Playwright captures static frames, I generate one frame per rotation step (0° → 18° → 36° → ... → 180°), each with a short duration. The result looks like a genuine 3D card flip when stitched together.
+
+---
+
+## Stitching with FFmpeg
+
+FFmpeg's concat demuxer lets you specify per-frame durations — perfect for mixing long scenes (CTA: 2s) with rapid flip frames (0.05s each).
+
+```
+# concat.txt
+file '/path/to/frame_00_hook.png'
+duration 2
+file '/path/to/frame_01_flip-s0.png'
+duration 0.07
+file '/path/to/frame_01_flip-s1.png'
+duration 0.06
+# ... more flip frames ...
+file '/path/to/frame_02_result.png'
+duration 4
+file '/path/to/frame_02_result.png'  # repeat last frame (FFmpeg requirement)
+```
+
+```bash
+ffmpeg -y -f concat -safe 0 -i concat.txt \
+  -vf "format=yuv420p" \
+  -c:v libx264 -preset medium -crf 23 \
+  -r 30 -movflags +faststart \
+  output.mp4
+```
+
+The `-movflags +faststart` is critical for Instagram — it moves the moov atom to the beginning so the video starts playing while still loading.
+
+---
+
+## Font Loading: A Subtle Trap
+
+Google Fonts (`@import url(...)`) fails silently in `domcontentloaded` mode. The text renders in a fallback sans-serif with no warning.
+
+Fix: Use system fonts via `@font-face` pointing to local files.
+
+```css
+@font-face {
+  font-family: 'NotoKR';
+  src: url('file:///usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
+       format('truetype');
+}
+body { font-family: 'NotoKR', sans-serif; }
+```
+
+Most Linux systems ship Noto CJK. No download needed.
+
+---
+
+## Uploading to Instagram via Graph API
+
+Instagram's Reels upload is a three-step process:
+
+```
+1. POST /{user_id}/media
+   → media_type=REELS, video_url=<public URL>
+   ← container_id
+
+2. GET /{container_id}?fields=status_code
+   → poll until status_code = "FINISHED"
+
+3. POST /{user_id}/media_publish
+   → creation_id={container_id}
+   ← media_id (live Reel)
+```
+
+**Critical requirement:** The video must be at a publicly accessible HTTPS URL during processing. I serve it temporarily from my existing Next.js app:
+
+```bash
+# Copy to public folder, serve via existing domain
+cp output.mp4 /path/to/nextjs/public/media/tmp-reel.mp4
+VIDEO_URL="https://yourdomain.com/media/tmp-reel.mp4"
+```
+
+Typical processing time: 20–60 seconds depending on video length.
+
+---
+
+## What I Got Wrong (and Fixed)
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| Images not loading | `networkidle` → `domcontentloaded` but remote URLs | Download all assets locally, use `file://` |
+| Card looks like squishing | `scaleX` transform | `rotateY` with `preserve-3d` |
+| Korean fonts missing | Google Fonts CDN blocked in headless | Local `@font-face` with system NotoSansCJK |
+| Video rejected by Instagram | Missing `-movflags +faststart` | Add to FFmpeg args |
+
+---
+
+## Results
+
+The full pipeline — 3 Reels with 38 frames each — runs in under 4 minutes on a standard Linux server. Each Reel is ~750KB and 21 seconds long.
+
+The card flip animation is the centerpiece: 10 frames covering 0°→180° rotation, with ease-in-out timing (faster in the middle, slower at edges) that makes it feel physical.
+
+---
+
+## Error Handling in Production
+
+The parts most tutorials skip — but where things actually break.
+
+**Token expiration** is the most common failure. Long-lived tokens expire after 60 days. Catch it early:
+
+```javascript
+async function uploadReel(videoUrl, caption) {
+  const res = await createContainer(videoUrl, caption);
+
+  // Token expired or revoked
+  if (res.error?.code === 190) {
+    console.error('Access token expired. Refresh via:', 
+      `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=OLD_TOKEN`
+    );
+    throw new Error('TOKEN_EXPIRED');
+  }
+
+  // Video format rejected
+  if (res.error?.code === 9004) {
+    throw new Error('VIDEO_FORMAT: check codec (H.264), resolution (1080x1920), duration (3–90s)');
+  }
+}
+```
+
+**Container stuck in IN_PROGRESS** — add a timeout:
+
+```javascript
+async function waitForContainer(containerId, maxWaitMs = 300_000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const { status_code } = await checkStatus(containerId);
+    if (status_code === 'FINISHED') return true;
+    if (status_code === 'ERROR') throw new Error('Container processing failed');
+    await sleep(10_000);
+  }
+  throw new Error('Upload timeout after 5 minutes');
+}
+```
+
+---
+
+## Scheduling with Cron
+
+Once the pipeline works, automate it. The video URL must be reachable during Instagram's processing window (typically 20–60s), so keep the file served until the container reaches `FINISHED`.
+
+```javascript
+// cron: run at 7:00 AM every day
+// 0 7 * * *
+
+async function dailyReelsPipeline() {
+  const frames = await generateFrames();       // Playwright
+  const videoPath = await stitchVideo(frames); // FFmpeg
+  const publicUrl = await serveTemporarily(videoPath);
+  
+  const containerId = await createContainer(publicUrl, caption);
+  await waitForContainer(containerId);
+  const mediaId = await publishContainer(containerId);
+  
+  await cleanup(videoPath, publicUrl);
+  console.log(`Published: ${mediaId}`);
+}
+```
+
+**Instagram rate limits:** You can publish up to 50 posts per 24 hours per account. For a daily Reels schedule, this is well within limits.
+
+---
+
+## Common Failures (Quick Reference)
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `code: 190` | Token expired | Refresh long-lived token |
+| `code: 9004` | Bad video format | H.264 + 1080×1920 + 3–90s |
+| `status: ERROR` on container | Video URL unreachable | Ensure HTTPS URL is public during processing |
+| No Korean text in frames | Google Fonts not loading | Use local `@font-face` with system fonts |
+| Images blank in frames | Remote URLs + `domcontentloaded` | Download assets locally, use `file://` |
+| Reel rejected silently | Missing `-movflags +faststart` | Add to FFmpeg args |
+
+---
+
+## What's Next
+
+- Add background music via FFmpeg `-i audio.mp3 -shortest`
+- Generate captions dynamically from content data
+- A/B test hook frames for watch-time optimization
+
+The pipeline runs fully headless. Once templates are built, new Reels are one cron job away.
+
+---
+
+*Built with: Node.js, Playwright 1.x, FFmpeg 6.x, Instagram Graph API v22*

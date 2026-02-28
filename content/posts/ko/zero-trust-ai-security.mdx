@@ -1,0 +1,374 @@
+---
+title: "Zero Trust AI 보안: 프로덕션 ML 시스템 방어 전략"
+date: "2026-02-11"
+description: "프로덕션 AI 시스템에 zero trust 원칙을 적용하는 방법. 모델 poisoning 방어부터 공급망 보안, adversarial 공격 대응, NIST AI RMF 구현까지."
+tags: ["security","zero-trust","ai-safety","adversarial","model-security"]
+series: "The 2026 AI Agent Deep Dive"
+seriesOrder: 22
+---
+
+<TLDR>
+AI를 위한 zero trust 아키텍처는 더 이상 선택이 아니라 생존 전략입니다. 이 글에서는 프로덕션 ML 시스템을 모델 poisoning, adversarial 공격, 공급망 침해, 내부자 위협으로부터 방어하는 방법을 다룹니다. NIST AI 리스크 관리 프레임워크, red teaming 방법론, 2026년에 통하는 실전 보안 강화 전략을 소개합니다.
+</TLDR>
+
+## 문제: AI 시스템은 고가치 타겟이다
+
+전통적인 보안은 네트워크 경계 내부를 신뢰한다는 전제에서 출발합니다. Zero trust는 **기본적으로 침해를 가정**합니다—모든 것을 검증하고, 아무것도 믿지 않습니다.
+
+AI 시스템에서 이런 사고방식은 특히 중요합니다. 왜일까요?
+
+- **모델 탈취**: 훈련된 모델은 수백만 원의 컴퓨팅 자원과 지적 재산을 담고 있습니다
+- **데이터 poisoning**: 오염된 훈련 데이터 = 오염된 의사결정
+- **Adversarial inputs**: 모델을 속이도록 조작된 입력
+- **공급망 공격**: 침해된 의존성, 사전 훈련 모델, 데이터셋
+- **모델 inversion**: 배포된 모델에서 훈련 데이터 추출
+
+공격 표면은 방대합니다. 위험 부담은 더욱 큽니다.
+
+## AI를 위한 Zero Trust 원칙
+
+전통적인 zero trust는 신원, 장치, 네트워크에 집중합니다. AI에서는 범위를 확장합니다:
+
+### 1. **절대 믿지 말고, 항상 검증하라**
+
+ML 파이프라인의 모든 컴포넌트를 인증하고 검증해야 합니다:
+
+- 훈련 데이터 소스
+- 사전 훈련된 모델
+- 의존성 패키지 (PyTorch, TensorFlow, transformers)
+- 추론 요청
+- 모델 출력
+
+<Terminal>
+# 예시: 사전 훈련 모델의 체크섬 검증
+sha256sum model.safetensors
+# 공식 소스의 알려진 해시와 비교
+echo "a3f2b8... model.safetensors" | sha256sum -c
+</Terminal>
+
+### 2. **최소 권한 접근**
+
+ML 라이프사이클 전반에 걸쳐 권한을 분리합니다:
+
+- **데이터 과학자**: 훈련 데이터 읽기, 실험 추적 쓰기
+- **ML 엔지니어**: 모델 배포, 추론 로그 읽기
+- **모델**: 필요한 API만 접근, 기본적으로 인터넷 차단
+- **추론 서비스**: 모델 가중치 읽기, 예측 쓰기—그 이상은 없음
+
+### 3. **침해를 가정하라**
+
+침해를 예상하고 시스템을 설계합니다:
+
+- **불변 인프라**: 읽기 전용 컨테이너로 모델 배포
+- **감사 로깅**: 모든 예측, 모든 접근을 타임스탬프와 서명으로 기록
+- **이상 탐지**: 비정상적인 추론 패턴 모니터링
+- **킬 스위치**: 신속한 모델 롤백 및 격리 기능
+
+## 모델 Poisoning 방어
+
+Poisoning 공격은 훈련 세트에 악의적인 데이터를 주입합니다. 모델은 특정 입력에서 실패하도록—혹은 항상 실패하도록—학습합니다.
+
+### 탐지 전략
+
+**1. 데이터 출처 추적**
+
+모든 데이터 포인트의 출처, 변환, 계보를 기록합니다:
+
+<Terminal output={`# 예시: 암호화된 데이터 매니페스트
+{
+  "dataset_id": "train-20260210",
+  "records": 1000000,
+  "hash": "sha256:b4c8d2...",
+  "sources": [
+    {"origin": "crawl-20260201", "verified": true, "signer": "data-team-key"},
+    {"origin": "user-uploads", "verified": false, "flagged": 127}
+  ]
+}`} />
+
+**2. 이상치 탐지**
+
+통계적 방법으로 비정상적인 훈련 샘플을 플래그합니다:
+
+- 레이블 뒤집기 탐지 (최근접 이웃과 레이블 비교)
+- 특성 분포 분석 (분포 밖 샘플 탐지)
+- 그래디언트 분석 (비정상적인 손실 그래디언트를 가진 샘플 식별)
+
+**3. 견고한 훈련 기법**
+
+- **RONI (Reject On Negative Impact)**: 검증 성능을 해치는 샘플 제거
+- **차등 프라이버시**: 개별 샘플이 모델 가중치에 미치는 영향 제한
+- **Byzantine-robust 집계**: 연합 학습 시나리오용
+
+### 검증 파이프라인
+
+훈련 전:
+
+1. **스키마 검증**: 데이터가 예상 구조와 일치하는지 확인
+2. **범위 체크**: 불가능한 값 플래그 (나이 = -5, 확률 = 1.2)
+3. **중복 탐지**: 의심스럽게 반복되는 샘플 식별
+4. **소스 신뢰도 점수**: 출처 신뢰 수준에 따라 데이터 가중치 부여
+
+## Adversarial 공격 방어
+
+Adversarial 예제는 모델을 속이기 위해 조작된 입력으로—대개 인간에게는 감지되지 않습니다.
+
+### 공격 유형
+
+- **회피 공격**: 추론 시점에 입력 수정 (예: 정지 표지판에 스티커)
+- **Poisoning 공격**: 훈련 중 백도어 삽입
+- **모델 추출**: 모델을 쿼리하여 로직 탈취
+- **멤버십 추론**: 샘플이 훈련 데이터에 있었는지 판단
+
+### 방어 기법
+
+**1. Adversarial 훈련**
+
+훈련에 adversarial 예제를 포함합니다:
+
+<Terminal>
+# 의사 코드: Fast Gradient Sign Method (FGSM) 증강
+for batch in train_loader:
+    # 일반 순전파
+    loss = model(batch)
+    
+    # Adversarial 예제 생성
+    gradient = compute_gradient(loss, batch)
+    adversarial_batch = batch + epsilon * sign(gradient)
+    
+    # 깨끗한 것과 adversarial 둘 다 훈련
+    combined_loss = loss(batch) + loss(adversarial_batch)
+    combined_loss.backward()
+</Terminal>
+
+**2. 입력 정화**
+
+- **전처리 방어**: JPEG 압축, 비트 깊이 감소
+- **특성 압축**: 입력 색상/비트 깊이를 줄여 adversarial 노이즈 제거
+- **무작위화**: 추론 시 무작위 변환 추가
+
+**3. 탐지 메커니즘**
+
+- **신뢰도 임계값**: 낮은 신뢰도 예측 거부
+- **앙상블 불일치**: 여러 모델이 불일치하는 입력 플래그
+- **통계적 테스트**: 입력 특성의 분포 변화 탐지
+
+**4. 인증된 방어**
+
+증명 가능한 견고성 보장 (비싸지만 중요한 시스템에 가치 있음):
+
+- Randomized smoothing
+- Lipschitz 제약 네트워크
+- Interval bound propagation
+
+## ML 공급망 보안
+
+ML 공급망은 파편화되어 있고 위험합니다:
+
+- **사전 훈련 모델**: Hugging Face, OpenAI, Anthropic, Meta
+- **데이터셋**: Kaggle, Common Crawl, 독점 스크랩
+- **라이브러리**: PyTorch, TensorFlow, scikit-learn, numpy
+- **인프라**: AWS SageMaker, Azure ML, GCP Vertex AI
+
+### 위협 벡터
+
+1. **침해된 모델 가중치**: 악의적인 행위자가 백도어가 있는 체크포인트 업로드
+2. **의존성 혼란**: 오타 스쿼팅 (예: `torch` vs `troch`)
+3. **악의적인 패키지**: 숨겨진 페이로드를 가진 PyPI/npm 패키지
+4. **데이터셋 poisoning**: 공개 플랫폼에 호스팅된 오염된 데이터
+
+### 완화 전략
+
+**1. 모델 검증**
+
+- **체크섬 검증**: 항상 SHA-256 해시 확인
+- **서명 검증**: 공식 릴리스에 GPG/코드 서명 사용
+- **샌드박스 테스트**: 격리된 환경에서 먼저 모델 로드
+
+<Terminal>
+# 예시: Hugging Face 모델 검증
+from transformers import AutoModel
+import hashlib
+
+model = AutoModel.from_pretrained("bert-base-uncased")
+# 가중치가 조작되지 않았는지 검증
+expected_hash = "a3f2b8c4d5e6f7..."
+actual_hash = hashlib.sha256(model.state_dict()).hexdigest()
+assert actual_hash == expected_hash, "모델 무결성 검사 실패!"
+</Terminal>
+
+**2. 의존성 고정**
+
+특정 버전으로 의존성을 고정합니다:
+
+<Terminal>
+# 정확한 버전을 가진 requirements.txt
+torch==2.1.0+cu118
+transformers==4.36.0
+numpy==1.24.3
+</Terminal>
+
+**3. 프라이빗 레지스트리**
+
+내부적으로 의존성 미러링:
+
+- 검증된 모델을 내부 아티팩트 스토리지에 호스팅
+- 프라이빗 PyPI 미러 사용 (예: Artifactory, Nexus)
+- 중요한 프로덕션 환경은 에어갭 구성
+
+**4. 소프트웨어 자재명세서 (SBOM)**
+
+모든 컴포넌트를 추적합니다:
+
+<Terminal>
+# 예시: syft로 SBOM 생성
+syft packages dir:/path/to/ml-project -o json > sbom.json
+</Terminal>
+
+## AI Red Teaming
+
+Red teaming은 공격자 행동을 시뮬레이션하여 공격자가 발견하기 전에 취약점을 찾습니다.
+
+### Red Team 목표
+
+1. **인증 우회**: 자격 증명 없이 모델 API 접근
+2. **훈련 데이터 추출**: 멤버십 추론, 모델 inversion
+3. **오분류 유발**: Adversarial 예제, 프롬프트 인젝션
+4. **서비스 거부**: 리소스 고갈, adversarial 입력
+5. **권한 상승**: 모델 출력을 통한 관리자 접근 획득
+
+### Red Team 방법론
+
+**1. Black-Box 테스트**
+
+외부 공격자로서 모델을 쿼리합니다:
+
+- 엣지 케이스 제출 (빈 입력, 대량 입력, 유니코드 익스플로잇)
+- 프롬프트 인젝션 취약점 탐색 (LLM)
+- 속도 제한 및 인증 테스트
+
+**2. White-Box 테스트**
+
+모델 아키텍처 및 가중치에 완전 접근:
+
+- 최적 adversarial 예제 생성 (PGD, C&W 공격)
+- 백도어 탐지를 위한 그래디언트 분석
+- 결정 경계 추출
+
+**3. 자동화 도구**
+
+- **CleverHans**: Adversarial 예제 라이브러리
+- **Foolbox**: 견고성 평가 프레임워크
+- **TextAttack**: NLP 전용 adversarial 공격
+- **ART (Adversarial Robustness Toolbox)**: IBM의 방어 라이브러리
+
+<Terminal>
+# 예시: CleverHans로 adversarial 예제 생성
+from cleverhans.torch.attacks.projected_gradient_descent import projected_gradient_descent
+
+adversarial_x = projected_gradient_descent(
+    model, x, eps=0.3, eps_iter=0.01, nb_iter=40
+)
+</Terminal>
+
+### 지속적 Red Teaming
+
+CI/CD에 red teaming을 통합합니다:
+
+1. **배포 전 스캔**: 프로덕션 전에 adversarial 테스트 스위트 실행
+2. **버그 바운티**: 외부 연구자에게 인센티브 제공
+3. **시뮬레이션 환경**: 공격자 행동을 연구하기 위한 허니팟 모델 배포
+
+## NIST AI 리스크 관리 프레임워크
+
+NIST AI RMF는 AI 리스크를 위한 구조화된 거버넌스를 제공합니다.
+
+### 핵심 기능
+
+**1. GOVERN (거버넌스)**
+
+- AI 리스크 문화 및 책임 수립
+- 역할 정의 (AI 안전 책임자, 모델 소유자, red team)
+- 허용 가능한 사용, 데이터 처리, 모델 배포 정책 작성
+
+**2. MAP (매핑)**
+
+- AI 사용 사례 및 리스크 범주 식별
+- 데이터 흐름, 의존성, 이해관계자 매핑
+- 영향 평가 (재정, 평판, 안전, 법적)
+
+**3. MEASURE (측정)**
+
+- 메트릭 정의: 정확도, 공정성, 견고성, 해석 가능성
+- 모델 드리프트, adversarial 견고성 점수 모니터링
+- 사건 추적 (거짓 긍정, adversarial 성공)
+
+**4. MANAGE (관리)**
+
+- 통제 구현: 입력 검증, 접근 제어, 감사 로깅
+- 리스크 우선순위화 (가능성 × 영향)
+- 완화 계획: adversarial 훈련, 모델 앙상블, human-in-the-loop
+
+### 실제 구현
+
+<Terminal>
+# 예시: AI 리스크 레지스트리 (risks.yaml)
+risks:
+  - id: RISK-001
+    title: "Adversarial 이미지 입력"
+    likelihood: high
+    impact: medium
+    mitigations:
+      - "ImageNet-C에서 adversarial 훈련"
+      - "입력 전처리 (JPEG 압축)"
+      - "앙상블 투표 (3개 이상 모델)"
+    status: mitigated
+    owner: ml-security-team
+</Terminal>
+
+## 실전 보안 강화 체크리스트
+
+### 훈련 전
+
+- [ ] 데이터 소스 검증 (체크섬, 서명)
+- [ ] 훈련 데이터에서 이상치 탐지 실행
+- [ ] 데이터 출처 로깅 활성화
+- [ ] 의존성 취약점 스캔 (Snyk, Dependabot)
+
+### 훈련 중
+
+- [ ] 차등 프라이버시 사용 (민감한 데이터는 ε &lt; 1.0)
+- [ ] 모든 하이퍼파라미터 및 랜덤 시드 로깅
+- [ ] 실험 추적 활성화 (MLflow, Weights & Biases)
+- [ ] Adversarial 검증 체크 실행
+
+### 배포 전
+
+- [ ] 모델 red team (black-box + white-box)
+- [ ] Adversarial 견고성 보고서 생성
+- [ ] 모델 체크섬 검증
+- [ ] 롤백 절차 테스트
+
+### 프로덕션에서
+
+- [ ] 추론 API 속도 제한
+- [ ] 요청 메타데이터와 함께 모든 예측 로깅
+- [ ] 입력 드리프트 모니터링 (KL divergence, Wasserstein distance)
+- [ ] 비정상 패턴 알림 설정
+- [ ] 신속한 모델 격리를 위한 킬 스위치 유지
+
+## 결론: 보안은 선택이 아니다
+
+AI를 위한 zero trust는 편집증이 아니라 현실주의입니다. 공격 표면은 너무 크고, 결과는 너무 심각합니다.
+
+작게 시작하세요:
+
+1. **의존성을 검증하라** (체크섬, SBOM)
+2. **모든 것을 로깅하라** (입력, 출력, 접근)
+3. **분기마다 red team을 운영하라** (내부 또는 외부)
+4. **NIST AI RMF를 채택하라** (경량 버전이라도)
+
+공격자는 이미 여기 있습니다. 문제는 당신이 제때 탐지할 수 있느냐는 것입니다.
+
+---
+
+**시리즈 다음 편**: 프라이버시 보존 ML 기법 (연합 학습, 동형 암호화, 안전한 다자간 계산). 데이터를 보지 않고 모델을 훈련하는 방법.
