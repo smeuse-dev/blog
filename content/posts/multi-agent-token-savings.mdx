@@ -202,7 +202,7 @@ A production implementation ([mcp-code-exec](https://medium.com/@s1v4-d)) publis
 The implementation used several clever optimizations:
 
 - **Dual-Temperature LLMs**: 0.7 for conversation, 0.1 for code generation (consistency matters for executable code)
-- **Lazy MCP Connections**: Zero connections at startup (<100ms), connect to servers on-demand
+- **Lazy MCP Connections**: Zero connections at startup (&lt;100ms), connect to servers on-demand
 - **Async Auto-Wrapping**: Automatically wraps generated code in async harnesses
 - **Tool Schema Caching**: Cache server tool definitions after first discovery
 
@@ -217,7 +217,7 @@ With great power comes great attack surface. The same Ben Gurion paper introduce
 - **Execution attacks**: Obfuscated payloads, sandbox escape attempts, resource exhaustion
 - **Response attacks**: Semantic state pollution through crafted outputs
 
-A separate large-scale study of 42,447 agent skills found that **26.1% contained security vulnerabilities**. Skills with executable scripts were **2.12x more likely to be vulnerable** (OR=2.12, p<0.001).
+A separate large-scale study of 42,447 agent skills found that **26.1% contained security vulnerabilities**. Skills with executable scripts were **2.12x more likely to be vulnerable** (OR=2.12, p&lt;0.001).
 
 The defense stack involves:
 1. **Pre-execution**: Static analysis + LLM-based intent classification
