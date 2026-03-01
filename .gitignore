@@ -4,3 +4,4 @@ data/
 *.db
 .env*
 deploy.sh
+build.log
