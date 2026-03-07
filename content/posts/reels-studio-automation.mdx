@@ -1,0 +1,149 @@
+---
+title: "I Built a Full Instagram Reels Automation System in One Day"
+date: "2026-03-07"
+description: "How I went from manual social media posting to a fully automated Reels pipeline — generation, BGM mixing, approval, and Instagram upload — using Next.js, FFmpeg, and the Instagram Graph API."
+tags: ["automation", "instagram", "nextjs", "ffmpeg", "ai"]
+image: "/images/reels-studio-og.png"
+---
+
+I've been manually posting Instagram Reels for months. Every morning: run a script, check the output, copy to the right folder, open the Instagram app, upload, add caption, add hashtags, post. Repeat for each series. It was taking 20-30 minutes per day across 5 series.
+
+This weekend, I decided to fix that. Here's what I built.
+
+## The Problem
+
+I had 5 content series running on Instagram:
+- **운세 (Horoscope)** — daily star sign fortune content
+- **연화 (Yeonhwa)** — story-based character series
+- **커플 (Couple)** — relationship content
+- **다리 (Dari)** — tarot character series
+- **TTI** — AI fortune reading
+
+Each one had its own generation script (Node.js + FFmpeg), but everything after that was manual.
+
+## The Stack
+
+- **Next.js 15** (App Router) — dashboard + API server
+- **PostgreSQL** — reel tracking, schedules, agent logs
+- **FFmpeg** — video generation + BGM mixing
+- **Instagram Graph API** — automated publishing
+- **node-cron** — scheduled execution
+- **Docker** — containerized deployment
+
+## The Pipeline
+
+```
+Series Config
+    ↓
+node-cron scheduler
+    ↓
+Agent execution (.mjs script)
+    ↓
+FFmpeg renders video (1080×1920, 30fps)
+    ↓
+BGM mixing (fade in/out)
+    ↓
+Thumbnail extraction (frame at 3s)
+    ↓
+Human review (optional) OR autoApprove
+    ↓
+Instagram Graph API upload
+    ↓
+Telegram notification
+```
+
+## Key Implementation Details
+
+### Instagram Graph API Upload Flow
+
+The tricky part is that Instagram requires your video to be at a **publicly accessible URL** before you can create a media container. My workaround: serve the video from an existing public domain (`saju.smeuse.org/sns/`), then call the Graph API.
+
+```typescript
+// 1. Copy video to public path
+copyFileSync(localVideoPath, path.join(SAJU_PUBLIC_DIR, videoFile));
+
+// 2. Create container
+const createRes = await fetch(`https://graph.instagram.com/v22.0/${userId}/media`, {
+  method: "POST",
+  body: new URLSearchParams({
+    media_type: "REELS",
+    video_url: `https://saju.smeuse.org/sns/${videoFile}`,
+    caption,
+    access_token: token,
+  }),
+});
+
+// 3. Wait for processing (up to 3 minutes)
+let status = "IN_PROGRESS";
+while (status !== "FINISHED") {
+  await sleep(10000);
+  const { status_code } = await checkContainerStatus(containerId);
+  status = status_code;
+}
+
+// 4. Publish
+await fetch(`https://graph.instagram.com/v22.0/${userId}/media_publish`, {
+  method: "POST",
+  body: new URLSearchParams({ creation_id: containerId, access_token: token }),
+});
+```
+
+### BGM Auto-Mixing
+
+The generated videos are silent (just visual). Adding background music makes them feel complete:
+
+```bash
+# If video has no audio track, add BGM only
+ffmpeg -y -i "${videoPath}" -stream_loop -1 -i "${bgmPath}" \
+  -filter_complex "[1:a]volume=0.15,atrim=duration=${dur},afade=t=in:d=1,afade=t=out:st=${dur-2}:d=2[bgm]" \
+  -map 0:v -map "[bgm]" -c:v copy -c:a aac -b:a 128k -shortest "${output}"
+```
+
+I use 528Hz healing frequencies for horoscope content and piano ambient for story content.
+
+### Scheduled Execution with node-cron
+
+```typescript
+// instrumentation.ts — runs on server start
+export async function register() {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { initScheduler } = await import("./lib/scheduler");
+    await initScheduler();
+  }
+}
+
+// scheduler.ts
+const task = cron.schedule("0 7 * * *", () => runSchedule(schedule), {
+  timezone: "Asia/Seoul",
+});
+```
+
+When a schedule fires, it generates the reel, mixes BGM, extracts a thumbnail, and — if `autoApprove` is enabled — publishes to Instagram automatically.
+
+## The Dashboard
+
+The management UI at `localhost:3006` (soon `reels.smeuse.org`):
+
+- **Dashboard** — pending approvals banner, quick generate buttons, status cards
+- **Reels** — grid view with hover video preview, inline approve/upload buttons
+- **Series** — per-series stats, hashtag preview, one-click generate
+- **History** — all uploaded reels with Instagram media IDs
+- **Schedule** — cron management with human-readable descriptions
+
+## Results
+
+In one day of development:
+- Went from 20-30 min/day manual work to ~0 min
+- Successfully tested end-to-end: generated `horoscope-20260307.mp4` → Instagram (mediaId: `18565867972009010`)
+- 4 git commits, ~2,900 lines of code
+
+The full pipeline now runs automatically every morning at 7 AM KST.
+
+## What's Next
+
+- Add `reels.smeuse.org` via Cloudflare Tunnel
+- Performance analytics (Instagram Insights API)
+- Multi-account support
+- A/B test different video styles
+
+The code is at [github.com/smeuse-dev/reels-studio](https://github.com/smeuse-dev/reels-studio).

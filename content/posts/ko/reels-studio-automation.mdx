@@ -1,0 +1,141 @@
+---
+title: "하루 만에 인스타그램 릴스 완전 자동화 시스템을 만들었다"
+date: "2026-03-07"
+description: "Next.js, FFmpeg, Instagram Graph API를 활용해 릴스 생성부터 BGM 합성, 승인, 인스타 업로드까지 완전 자동화한 Reels Studio 개발기."
+tags: ["자동화", "인스타그램", "nextjs", "ffmpeg", "ai"]
+image: "/images/reels-studio-og.png"
+---
+
+매일 아침 인스타그램 릴스를 수동으로 올리는 게 지겨웠다. 스크립트 실행, 결과물 확인, 폴더 복사, 인스타 앱 열기, 업로드, 캡션 입력, 해시태그 추가, 게시. 5개 시리즈를 반복하면 매일 20~30분이 사라졌다.
+
+결국 고쳐버렸다. 어떻게 만들었는지 정리해본다.
+
+## 문제 상황
+
+인스타그램에서 5개 콘텐츠 시리즈를 운영 중이었다:
+- **운세** — 매일 별자리 운세 콘텐츠
+- **연화** — 스토리 기반 캐릭터 시리즈
+- **커플** — 연애 관계 콘텐츠
+- **다리** — 타로 캐릭터 시리즈
+- **TTI** — AI 운세 리딩
+
+각각 Node.js + FFmpeg 생성 스크립트가 있었지만, 그 이후는 전부 수동이었다.
+
+## 기술 스택
+
+- **Next.js 15** (App Router) — 대시보드 + API 서버
+- **PostgreSQL** — 릴스 추적, 스케줄, 에이전트 로그
+- **FFmpeg** — 영상 생성 + BGM 합성
+- **Instagram Graph API** — 자동 게시
+- **node-cron** — 스케줄 실행
+- **Docker** — 컨테이너 배포
+
+## 파이프라인
+
+```
+시리즈 설정
+    ↓
+node-cron 스케줄러
+    ↓
+에이전트 실행 (.mjs 스크립트)
+    ↓
+FFmpeg 영상 렌더링 (1080×1920, 30fps)
+    ↓
+BGM 합성 (페이드 인/아웃)
+    ↓
+썸네일 추출 (3초 지점 캡처)
+    ↓
+사람이 검토 (선택사항) 또는 자동 승인
+    ↓
+Instagram Graph API 업로드
+    ↓
+텔레그램 알림
+```
+
+## 핵심 구현 포인트
+
+### Instagram Graph API 업로드 플로우
+
+까다로운 점은 인스타그램이 미디어 컨테이너를 만들기 전에 영상이 **공개 접근 가능한 URL**에 있어야 한다는 것이다. 해결책: 이미 운영 중인 공개 도메인(`saju.smeuse.org/sns/`)에 영상을 복사한 후 Graph API를 호출한다.
+
+```typescript
+// 1. 공개 경로에 복사
+copyFileSync(localVideoPath, path.join(SAJU_PUBLIC_DIR, videoFile));
+
+// 2. 컨테이너 생성
+const createRes = await fetch(`https://graph.instagram.com/v22.0/${userId}/media`, {
+  method: "POST",
+  body: new URLSearchParams({
+    media_type: "REELS",
+    video_url: `https://saju.smeuse.org/sns/${videoFile}`,
+    caption,
+    access_token: token,
+  }),
+});
+
+// 3. 처리 대기 (최대 3분)
+let status = "IN_PROGRESS";
+while (status !== "FINISHED") {
+  await sleep(10000);
+  status = (await checkContainerStatus(containerId)).status_code;
+}
+
+// 4. 게시
+await fetch(`https://graph.instagram.com/v22.0/${userId}/media_publish`, { ... });
+```
+
+### BGM 자동 합성
+
+생성된 영상은 무음이다. 배경음악을 추가하면 훨씬 완성도가 높아진다:
+
+```bash
+# 오디오 트랙이 없는 영상에 BGM 추가
+ffmpeg -y -i "${videoPath}" -stream_loop -1 -i "${bgmPath}" \
+  -filter_complex "[1:a]volume=0.15,atrim=duration=${dur},\
+    afade=t=in:d=1,afade=t=out:st=${dur-2}:d=2[bgm]" \
+  -map 0:v -map "[bgm]" -c:v copy -c:a aac -b:a 128k -shortest "${output}"
+```
+
+운세 콘텐츠에는 528Hz 힐링 주파수, 스토리 콘텐츠에는 피아노 앰비언트를 사용한다.
+
+### node-cron 자동 스케줄
+
+```typescript
+// instrumentation.ts — 서버 시작 시 자동 실행
+export async function register() {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { initScheduler } = await import("./lib/scheduler");
+    await initScheduler();
+  }
+}
+```
+
+스케줄이 실행되면 릴스 생성 → BGM 합성 → 썸네일 추출, `autoApprove`가 켜져 있으면 인스타 자동 업로드까지 한 번에 처리한다.
+
+## 대시보드 기능
+
+`localhost:3006` (곧 `reels.smeuse.org`)에서 관리:
+
+- **대시보드** — 요승인 릴스 배너, 시리즈별 빠른 생성, 상태 카드
+- **릴스** — 그리드 뷰, hover 비디오 미리보기, 인라인 승인/업로드
+- **시리즈** — 시리즈별 통계, 해시태그 미리보기, 원클릭 생성
+- **업로드 이력** — 업로드된 릴스와 Instagram 미디어 ID
+- **스케줄** — cron 관리, 한국어 설명, 지금 실행 버튼
+
+## 결과
+
+하루 개발로:
+- 매일 20~30분 수동 작업 → 0분
+- 엔드투엔드 테스트 성공: `horoscope-20260307.mp4` 생성 → 인스타 업로드 완료 (mediaId: `18565867972009010`)
+- 커밋 4개, 코드 약 2,900줄
+
+이제 매일 아침 7시 KST에 파이프라인이 자동으로 실행된다.
+
+## 앞으로 할 것
+
+- Cloudflare Tunnel로 `reels.smeuse.org` 연결
+- 인스타 인사이트 API로 성과 분석
+- 멀티 계정 지원
+- 영상 스타일 A/B 테스트
+
+코드는 [github.com/smeuse-dev/reels-studio](https://github.com/smeuse-dev/reels-studio)에 있다.
